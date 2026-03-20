@@ -15,16 +15,12 @@ Todas as rotas usam `Authorization: Bearer <AGENT_API_KEY>`.
 A chave é armazenada como secret no Supabase (`AGENT_API_KEY`) e no **GCP Secret Manager**.
 Nunca commitar a chave no repositório.
 
-```bash
-Authorization: Bearer <AGENT_API_KEY>
-```
-
 ---
 
 ## Fluxo típico do agente
 
 ```
-1. Mensagem recebe do cliente via WhatsApp
+1. Mensagem recebida do cliente via WhatsApp
         ↓
 2. GET /customers?store_id=X&whatsapp=55319...
    → found: false?
@@ -33,14 +29,18 @@ Authorization: Bearer <AGENT_API_KEY>
         ↓
 4. GET /products?store_id=X&in_stock=true  ← catálogo disponível
         ↓
-5. POST /calculate-freight  ← verifica raio + valor
+5. POST /calculate-freight  ← verifica raio + valor do frete
         ↓
-6. [BACKLOG] POST /orders  ← finaliza pedido
+6. POST /orders  ← registra o pedido no dashboard do lojista
+        ↓
+7. [Webhook recebido] order.status_changed  ← lojista atualizou status
+        ↓
+8. Agente notifica o cliente via WhatsApp
 ```
 
 ---
 
-## Endpoints
+## Endpoints de saída (agente → Pedii)
 
 ### `GET /customers` — Buscar cliente
 
@@ -54,20 +54,8 @@ Authorization: Bearer <AGENT_API_KEY>
 
 **Resposta 200:**
 ```json
-{
-  "found": true,
-  "customer": {
-    "id": "ee4d2a74-...",
-    "nome": "João Silva",
-    "whatsapp": "5531999990000",
-    "cidade": "Varginha",
-    "estado": "MG",
-    "lat": -21.5513,
-    "lng": -45.4333
-  }
-}
+{ "found": true, "customer": { "id": "...", "nome": "João Silva", "whatsapp": "5531999990000" } }
 ```
-
 Se não encontrado: `{ "found": false, "customer": null }`
 
 ---
@@ -91,8 +79,6 @@ Upsert por `whatsapp` + organização. Use para novos clientes ou atualização 
 }
 ```
 
-> O geocoding de `lat`/`lng` acontece automaticamente via trigger após a inserção.
-
 **Resposta 201:** `{ "customer": { ...dados } }`
 
 ---
@@ -110,20 +96,9 @@ Upsert por `whatsapp` + organização. Use para novos clientes ou atualização 
 ```json
 {
   "store": { "id": "uuid", "nome": "Loja Centro" },
-  "total": 2,
-  "products": [
-    {
-      "id": "uuid",
-      "descricao": "Café Especial 250g",
-      "unidade_medida": "UN",
-      "quantidade": 48,
-      "valor_venda": 32.90,
-      "group": { "id": "uuid", "nome": "Cafés" }
-    }
-  ],
-  "groups": [
-    { "id": "uuid", "nome": "Cafés" }
-  ]
+  "total": 1,
+  "products": [{ "id": "uuid", "descricao": "Café Especial 250g", "quantidade": 48, "valor_venda": 32.90 }],
+  "groups": [{ "id": "uuid", "nome": "Cafés" }]
 }
 ```
 
@@ -133,10 +108,7 @@ Upsert por `whatsapp` + organização. Use para novos clientes ou atualização 
 
 **Body:**
 ```json
-{
-  "loja_id": "uuid-da-loja",
-  "cliente_id": "uuid-do-cliente"
-}
+{ "loja_id": "uuid-da-loja", "cliente_id": "uuid-do-cliente" }
 ```
 
 **Resposta 200:**
@@ -152,18 +124,130 @@ Upsert por `whatsapp` + organização. Use para novos clientes ou atualização 
 }
 ```
 
-**Lógica de cálculo:**
-- `distancia_km × valor_por_km` = valor base
-- Se valor base < `valor_minimo` → aplica o mínimo
-- Se valor do pedido ≥ `frete_gratis_acima_de` → frete = R$ 0,00
-
-> Se `dentro_raio: false`, o agente deve informar que a loja não faz entrega no endereço do cliente.
+> Se `dentro_raio: false`, informar ao cliente que a loja não entrega no endereço dele.
 
 ---
 
-### `POST /orders` — Criar pedido *(backlog)*
+### `POST /orders` — Criar pedido
 
-Em desenvolvimento. Registrará o pedido no dashboard do lojista ao final da venda.
+**Body:**
+```json
+{
+  "store_id": "uuid-da-loja",
+  "customer_id": "uuid-do-cliente",
+  "notes": "Entregar no período da tarde",
+  "shipping_value": 9.72,
+  "shipping_distance_km": 3.24,
+  "shipping_within_radius": true,
+  "items": [
+    { "product_id": "uuid", "quantity": 2, "unit_price": 32.90 }
+  ]
+}
+```
+
+**Resposta 201:** `{ "order": { "id": "uuid", "status": "open", "total": 75.52, ... } }`
+
+---
+
+### `GET /orders` — Listar ou buscar pedido
+
+| Parâmetro | Tipo | Descrição |
+|---|---|---|
+| `store_id` | uuid | ✅ Obrigatório para listagem |
+| `id` | uuid | Buscar pedido único (retorna itens completos) |
+| `status` | string | Filtrar por status |
+| `customer_id` | uuid | Filtrar por cliente |
+| `date_from` | date | Data inicial (`2026-03-01`) |
+| `date_to` | date | Data final (`2026-03-31`) |
+| `page` | int | Paginação (padrão: 1) |
+| `limit` | int | Itens por página (padrão: 50, máx: 100) |
+
+**Resposta 200 (listagem):**
+```json
+{ "orders": [...], "total": 10, "page": 1, "limit": 50 }
+```
+
+---
+
+### `PATCH /orders` — Atualizar status ou adicionar itens
+
+**Atualizar status:**
+```json
+{ "id": "uuid-do-pedido", "action": "update_status", "status": "accepted" }
+```
+
+**Adicionar itens:**
+```json
+{
+  "id": "uuid-do-pedido",
+  "action": "add_items",
+  "items": [{ "product_id": "uuid", "quantity": 1, "unit_price": 20.00 }]
+}
+```
+
+**Máquina de estados:**
+```
+open → accepted | cancelled
+accepted → shipped | cancelled
+shipped → received | cancelled
+received → (terminal)
+cancelled → (terminal)
+```
+
+**Resposta 422** se a transição não for válida:
+```json
+{ "error": "Transição inválida: received → cancelled", "allowed": [] }
+```
+
+---
+
+## Webhooks recebidos pelo agente (Pedii → agente)
+
+O Pedii envia eventos HTTP POST ao agente quando o **lojista** realiza ações no dashboard.
+O agente deve expor um endpoint para receber esses eventos e disparar mensagens no WhatsApp.
+
+### Autenticação recebida
+
+```
+Authorization: Bearer <AGENT_API_KEY>
+x-internal-secret: <INTERNAL_WEBHOOK_SECRET>
+```
+
+### Evento: `order.status_changed`
+
+Disparado quando o lojista muda o status de um pedido pelo dashboard.
+> Mudanças feitas pelo próprio agente via `PATCH /orders` **não** disparam este evento.
+
+**Payload:**
+```json
+{
+  "event": "order.status_changed",
+  "order_id": "83781578-c102-4bd3-8f22-9ea6167887aa",
+  "old_status": "open",
+  "new_status": "accepted",
+  "organization_id": "f988b66e-21e6-48d5-a90d-08f746600763",
+  "order": {
+    "id": "83781578-c102-4bd3-8f22-9ea6167887aa",
+    "status": "accepted",
+    "total": 310.00,
+    "shipping_value": 10.00,
+    "stores": { "apelido": "Paraguaçu", "razao_social": "TM Farma - Paraguaçu" },
+    "customers": { "nome": "Eloá Mariane da Luz", "whatsapp": "(35) 98272-1736" },
+    "order_items": [
+      { "quantity": 15, "unit_price": 20.00, "subtotal": 300.00, "products": { "descricao": "Produto Teste Paraguaçu" } }
+    ]
+  }
+}
+```
+
+**Mensagens sugeridas por transição:**
+
+| Transição | Mensagem ao cliente |
+|---|---|
+| `open → accepted` | "✅ Seu pedido foi aceito e está sendo preparado!" |
+| `accepted → shipped` | "🚚 Seu pedido saiu para entrega!" |
+| `shipped → received` | "📦 Entrega confirmada. Obrigado pela compra!" |
+| `* → cancelled` | "❌ Seu pedido foi cancelado. Entre em contato para mais informações." |
 
 ---
 
@@ -175,7 +259,7 @@ Em desenvolvimento. Registrará o pedido no dashboard do lojista ao final da ven
 | `401` | Token ausente ou inválido |
 | `403` | Loja e cliente de organizações diferentes |
 | `404` | Recurso não encontrado |
-| `422` | Endereço insuficiente para geocodificar |
+| `422` | Transição inválida ou endereço insuficiente para geocodificar |
 | `500` | Erro interno |
 
 ---
