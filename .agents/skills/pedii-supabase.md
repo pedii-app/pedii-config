@@ -8,10 +8,19 @@ triggers: ["criar tabela", "criar policy", "criar view", "criar trigger", "criar
 Ao gerar código ou design para o Pedii, siga rigorosamente estes padrões:
 
 ### 1. Multi-Tenancy e Segurança (RLS)
-A hierarquia de dados é: `organizations → lojas → produtos/grupos_produto`.
+A hierarquia de dados é: `organizations → stores → products/product_groups`.
+
+Tabelas do projeto (nomes em inglês):
+* `organizations` — tenant raiz
+* `stores` — lojas da organização (antes: `lojas`)
+* `products` — estoque offline (antes: `produtos`)
+* `product_groups` — grupos de produto (antes: `grupos_produto`)
+* `customers` — clientes (antes: `clientes`)
+* `shipping_config` — configuração de frete (antes: `configuracoes_frete`)
+* `invites`, `users`, `whatsapp_instances` — já em inglês
 
 * Toda tabela transacional deve ter `organization_id` (isolamento de tenant).
-* Tabelas vinculadas a uma loja específica devem ter também `loja_id` (FK para `lojas`).
+* Tabelas vinculadas a uma loja específica devem ter também `store_id` (FK para `stores`).
 * O RLS é inegociável. Usar sempre as funções helper já existentes:
   * `get_auth_user_organization_id()` — retorna o org_id do usuário autenticado
   * `is_auth_user_admin()` — retorna true se role for owner ou admin

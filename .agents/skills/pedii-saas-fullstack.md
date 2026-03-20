@@ -17,14 +17,17 @@ Ao gerar código para a área logada do lojista no Pedii, você deve integrar pe
 A estrutura de dados do Pedii segue esta hierarquia obrigatória:
 
 ```
-organizations          ← tenant raiz (criada automaticamente no cadastro)
-  └── lojas            ← cada org pode ter N lojas (CNPJ, endereço, raio entrega)
-        ├── grupos_produto  ← agrupamento de produtos, isolado por loja
-        └── produtos        ← estoque offline ou bridge ERP, isolado por loja
+organizations      ← tenant raiz (criada automaticamente no cadastro)
+  └── stores       ← cada org pode ter N lojas (CNPJ, endereço, raio entrega)
+        ├── product_groups  ← agrupamento de produtos, isolado por loja
+        └── products        ← estoque offline ou bridge ERP, isolado por loja
 ```
 
+Todos os nomes de tabela são em **inglês**. Referência completa:
+`organizations`, `stores`, `products`, `product_groups`, `customers`, `shipping_config`, `invites`, `users`, `whatsapp_instances`.
+
 * Toda tabela transacional deve ter `organization_id` (isolamento de tenant).
-* Tabelas que pertencem a uma loja específica devem ter também `loja_id`.
+* Tabelas que pertencem a uma loja específica devem ter também `store_id`.
 * O Row Level Security (RLS) do Supabase é inegociável. Todo script SQL deve incluir *Policies* usando `get_auth_user_organization_id()` e `is_auth_user_admin()`.
 
 ### 3. Front-end Protegido e Hospedagem (Cloudflare)
