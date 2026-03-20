@@ -422,7 +422,7 @@ paths:
   # ────────────────────────────────────────────────────────────────────────────
   # CALCULAR FRETE
   # ────────────────────────────────────────────────────────────────────────────
-  /calcular-frete:
+  /calculate-freight:
     post:
       operationId: calcularFrete
       summary: Calcular frete e verificar raio de entrega

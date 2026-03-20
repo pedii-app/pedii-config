@@ -33,7 +33,7 @@ Authorization: Bearer <AGENT_API_KEY>
         ↓
 4. GET /products?store_id=X&in_stock=true  ← catálogo disponível
         ↓
-5. POST /calcular-frete  ← verifica raio + valor
+5. POST /calculate-freight  ← verifica raio + valor
         ↓
 6. [BACKLOG] POST /orders  ← finaliza pedido
 ```
@@ -129,7 +129,7 @@ Upsert por `whatsapp` + organização. Use para novos clientes ou atualização 
 
 ---
 
-### `POST /calcular-frete` — Calcular frete e raio de entrega
+### `POST /calculate-freight` — Calcular frete e raio de entrega
 
 **Body:**
 ```json
