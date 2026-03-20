@@ -1,0 +1,523 @@
+openapi: 3.1.0
+info:
+  title: Pedii Agent API
+  version: 1.0.0
+  description: |
+    APIs utilizadas pelo agente de vendas WhatsApp do Pedii.
+    Todas as rotas requerem autenticação via Bearer token.
+
+    ## Autenticação
+    O agente GCP usa uma chave estática (`AGENT_API_KEY`) armazenada no GCP Secret Manager.
+    Passe-a em todas as requisições:
+    ```
+    Authorization: Bearer <AGENT_API_KEY>
+    ```
+
+    ## Base URL
+    ```
+    https://qiqwylcjoyztqebqglok.supabase.co/functions/v1
+    ```
+
+servers:
+  - url: https://qiqwylcjoyztqebqglok.supabase.co/functions/v1
+    description: Supabase Edge Functions (produção)
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: AGENT_API_KEY armazenada no GCP Secret Manager
+
+  schemas:
+    Customer:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        nome:
+          type: string
+          example: João Silva
+        whatsapp:
+          type: string
+          description: Número normalizado (somente dígitos, com DDI)
+          example: "5531999990000"
+        cep:
+          type: string
+          example: "37062683"
+        logradouro:
+          type: string
+        numero:
+          type: string
+        complemento:
+          type: string
+          nullable: true
+        bairro:
+          type: string
+        cidade:
+          type: string
+        estado:
+          type: string
+          example: MG
+        lat:
+          type: number
+          format: double
+          nullable: true
+        lng:
+          type: number
+          format: double
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    Product:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        legacy_id:
+          type: string
+          nullable: true
+          description: ID do sistema legado (ERP/PDV). Nulo se não integrado.
+        descricao:
+          type: string
+          example: Café Especial 250g
+        unidade_medida:
+          type: string
+          enum: [UN, KG, G, LT, ML, MT, CM, CX, PC, DZ, PR]
+        quantidade:
+          type: number
+          description: Quantidade disponível em estoque
+          example: 48.0
+        valor_venda:
+          type: number
+          format: double
+          description: Preço de venda em BRL
+          example: 32.90
+        updated_at:
+          type: string
+          format: date-time
+        group:
+          type: object
+          nullable: true
+          properties:
+            id:
+              type: string
+              format: uuid
+            nome:
+              type: string
+              example: Cafés
+
+    FreteResult:
+      type: object
+      properties:
+        dentro_raio:
+          type: boolean
+          description: Se o cliente está dentro do raio de entrega da loja
+        distancia_km:
+          type: number
+          description: Distância em km entre loja e cliente (Haversine)
+          example: 3.24
+        raio_entrega_km:
+          type: number
+          description: Raio máximo de entrega configurado na loja
+          example: 5.0
+        valor_frete:
+          type: number
+          description: Valor do frete em BRL. Zero se frete grátis ou fora do raio.
+          example: 9.72
+        frete_gratis:
+          type: boolean
+          description: True se o frete foi zerado por regra de negócio
+        pedido_minimo_entrega:
+          type: number
+          description: Valor mínimo do pedido para habilitar entrega. Zero = sem mínimo.
+          example: 30.00
+        frete_gratis_acima_de:
+          type: number
+          nullable: true
+          description: Valor do pedido para ganhar frete grátis. Null = regra desativada.
+          example: 100.00
+        _geocodificado:
+          type: object
+          description: Indica se lat/lng foi calculado nesta chamada (lazy geocoding)
+          properties:
+            loja:
+              type: boolean
+            cliente:
+              type: boolean
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        detalhes:
+          type: string
+          nullable: true
+
+paths:
+  # ────────────────────────────────────────────────────────────────────────────
+  # CUSTOMERS
+  # ────────────────────────────────────────────────────────────────────────────
+  /customers:
+    get:
+      operationId: buscarCliente
+      summary: Buscar cliente pelo número de WhatsApp ou ID
+      description: |
+        Procura um cliente na organização vinculada à `store_id`.
+        Ideal para verificar se o cliente já está cadastrado antes de iniciar uma conversa.
+      parameters:
+        - name: store_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: ID da loja atendida pelo agente
+        - name: whatsapp
+          in: query
+          schema:
+            type: string
+          description: "Número do WhatsApp (com DDI). Ex: 5531999990000. Obrigatório se id não for informado."
+        - name: id
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: UUID do cliente. Obrigatório se whatsapp não for informado.
+      responses:
+        "200":
+          description: Resultado da busca
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  found:
+                    type: boolean
+                    description: False se o cliente não existe no sistema
+                  customer:
+                    oneOf:
+                      - $ref: "#/components/schemas/Customer"
+                      - type: "null"
+              examples:
+                encontrado:
+                  summary: Cliente encontrado
+                  value:
+                    found: true
+                    customer:
+                      id: "ee4d2a74-25fd-4432-91a8-96121c6bf64e"
+                      nome: João Silva
+                      whatsapp: "5531999990000"
+                      cidade: Varginha
+                      estado: MG
+                      lat: -21.5513
+                      lng: -45.4333
+                nao_encontrado:
+                  summary: Cliente não cadastrado
+                  value:
+                    found: false
+                    customer: null
+        "400":
+          description: Parâmetros inválidos
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Token inválido ou ausente
+        "404":
+          description: Loja não encontrada
+
+    post:
+      operationId: criarOuAtualizarCliente
+      summary: Criar ou atualizar cliente
+      description: |
+        Cria um novo cliente ou atualiza os dados de um existente (upsert por `whatsapp` + organização).
+        Deve ser chamado quando o agente identificar um novo contato ou quando o cliente atualizar seu endereço.
+        O geocoding de lat/lng acontece automaticamente via trigger.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - store_id
+                - nome
+                - whatsapp
+              properties:
+                store_id:
+                  type: string
+                  format: uuid
+                  description: ID da loja — determina a organização do cliente
+                nome:
+                  type: string
+                  example: João Silva
+                whatsapp:
+                  type: string
+                  description: Número com DDI (somente dígitos ou formatado)
+                  example: "5531999990000"
+                logradouro:
+                  type: string
+                numero:
+                  type: string
+                complemento:
+                  type: string
+                bairro:
+                  type: string
+                cidade:
+                  type: string
+                estado:
+                  type: string
+                  example: MG
+                cep:
+                  type: string
+                  example: "37062683"
+            examples:
+              novo_cliente:
+                summary: Novo cliente com endereço completo
+                value:
+                  store_id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                  nome: João Silva
+                  whatsapp: "5531999990000"
+                  logradouro: Avenida do Contorno
+                  numero: "40"
+                  bairro: Santa Luiza
+                  cidade: Varginha
+                  estado: MG
+                  cep: "37062683"
+      responses:
+        "201":
+          description: Cliente criado ou atualizado com sucesso
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  customer:
+                    $ref: "#/components/schemas/Customer"
+        "400":
+          description: Campos obrigatórios ausentes
+        "401":
+          description: Token inválido
+        "404":
+          description: Loja não encontrada
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # PRODUCTS
+  # ────────────────────────────────────────────────────────────────────────────
+  /products:
+    get:
+      operationId: consultarEstoque
+      summary: Consultar produtos em estoque de uma loja
+      description: |
+        Retorna o catálogo de produtos disponíveis para uma loja, com suporte a filtros.
+        Use `in_stock=true` para retornar apenas produtos com quantidade > 0.
+        Use `search` para busca textual na descrição do produto.
+        Use `group_id` para filtrar por grupo/categoria.
+      parameters:
+        - name: store_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: ID da loja
+        - name: search
+          in: query
+          schema:
+            type: string
+          description: "Busca textual na descrição do produto (case-insensitive). Ex: café"
+        - name: group_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: Filtrar por grupo/categoria de produto
+        - name: in_stock
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: Se true, retorna apenas produtos com quantidade > 0
+      responses:
+        "200":
+          description: Lista de produtos
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  store:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                      nome:
+                        type: string
+                  total:
+                    type: integer
+                    description: Total de produtos retornados
+                  products:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Product"
+                  groups:
+                    type: array
+                    description: Todos os grupos da loja (para navegação por categoria)
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                        nome:
+                          type: string
+              examples:
+                resultado:
+                  summary: Exemplo de resposta
+                  value:
+                    store:
+                      id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                      nome: Loja Centro
+                    total: 2
+                    products:
+                      - id: "a1b2c3d4-..."
+                        descricao: Café Especial 250g
+                        unidade_medida: UN
+                        quantidade: 48
+                        valor_venda: 32.90
+                        group:
+                          id: "g1g2g3g4-..."
+                          nome: Cafés
+                      - id: "e5f6g7h8-..."
+                        descricao: Café Tradicional 500g
+                        unidade_medida: UN
+                        quantidade: 120
+                        valor_venda: 18.50
+                        group:
+                          id: "g1g2g3g4-..."
+                          nome: Cafés
+                    groups:
+                      - id: "g1g2g3g4-..."
+                        nome: Cafés
+                      - id: "g9g0g1g2-..."
+                        nome: Acessórios
+        "400":
+          description: store_id não informado
+        "401":
+          description: Token inválido
+        "404":
+          description: Loja não encontrada
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # CALCULAR FRETE
+  # ────────────────────────────────────────────────────────────────────────────
+  /calcular-frete:
+    post:
+      operationId: calcularFrete
+      summary: Calcular frete e verificar raio de entrega
+      description: |
+        Recebe `loja_id` e `cliente_id`, calcula a distância via fórmula Haversine
+        e retorna o valor do frete com base nas configurações da organização.
+
+        **Lazy geocoding:** se loja ou cliente ainda não têm lat/lng, a função geocodifica
+        o endereço automaticamente e persiste as coordenadas para chamadas futuras.
+
+        **Lógica de cálculo:**
+        1. `distancia_km × valor_por_km` = valor base
+        2. Se valor base < `valor_minimo` → usa `valor_minimo`
+        3. Se valor do pedido ≥ `frete_gratis_acima_de` → `valor_frete = 0`
+
+        **Importante:** o campo `frete_gratis_acima_de` é retornado para que o agente
+        possa informar ao cliente quando o frete será gratuito.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - loja_id
+                - cliente_id
+              properties:
+                loja_id:
+                  type: string
+                  format: uuid
+                  description: ID da loja de origem da entrega
+                cliente_id:
+                  type: string
+                  format: uuid
+                  description: ID do cliente de destino
+            example:
+              loja_id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+              cliente_id: "ee4d2a74-25fd-4432-91a8-96121c6bf64e"
+      responses:
+        "200":
+          description: Resultado do cálculo de frete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FreteResult"
+              examples:
+                dentro_raio:
+                  summary: Cliente dentro do raio de entrega
+                  value:
+                    dentro_raio: true
+                    distancia_km: 3.24
+                    raio_entrega_km: 5.0
+                    valor_frete: 9.72
+                    frete_gratis: false
+                    pedido_minimo_entrega: 30.00
+                    frete_gratis_acima_de: 100.00
+                    _geocodificado:
+                      loja: false
+                      cliente: false
+                fora_do_raio:
+                  summary: Cliente fora do raio de entrega
+                  value:
+                    dentro_raio: false
+                    distancia_km: 8.51
+                    raio_entrega_km: 5.0
+                    valor_frete: 0
+                    frete_gratis: false
+                    pedido_minimo_entrega: 30.00
+                    frete_gratis_acima_de: null
+                    _geocodificado:
+                      loja: false
+                      cliente: false
+        "400":
+          description: Parâmetros ausentes
+        "401":
+          description: Token inválido
+        "403":
+          description: Loja e cliente pertencem a organizações diferentes
+        "404":
+          description: Loja ou cliente não encontrado
+        "422":
+          description: Não foi possível geocodificar loja ou cliente (endereço incompleto)
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # ORDERS (backlog)
+  # ────────────────────────────────────────────────────────────────────────────
+  /orders:
+    post:
+      operationId: criarPedido
+      summary: "[BACKLOG] Criar pedido"
+      description: |
+        **Em desenvolvimento.** Registra um pedido finalizado pelo agente no dashboard do lojista.
+
+        Campos planejados: `store_id`, `customer_id`, `itens[]`, `valor_total`,
+        `valor_frete`, `forma_pagamento`, `observacao`.
+      responses:
+        "501":
+          description: Não implementado
