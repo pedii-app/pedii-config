@@ -17,6 +17,19 @@ Nunca commitar a chave no repositório.
 
 ---
 
+## Campos presentes em todas as respostas
+
+Toda resposta bem-sucedida inclui dois campos de contexto da organização:
+
+| Campo | Tipo | Descrição |
+|---|---|---|
+| `organization_id` | uuid | ID da organização (tenant raiz do Pedii) |
+| `instance_name` | string \| null | Nome da instância WhatsApp conectada na Evolution API. `null` se não configurada. |
+
+O agente deve usar o `instance_name` para enviar mensagens via Evolution API.
+
+---
+
 ## Fluxo típico do agente
 
 ```
@@ -27,15 +40,18 @@ Nunca commitar a chave no repositório.
         ↓
 3. POST /customers  ← cria o cliente
         ↓
-4. GET /products?store_id=X&in_stock=true  ← catálogo disponível
+4. GET /products?organization_id=X&in_stock=true  ← catálogo de toda a org
+   (ou GET /products?store_id=X&in_stock=true  ← catálogo de uma loja específica)
         ↓
 5. POST /calculate-freight  ← verifica raio + valor do frete
         ↓
 6. POST /orders  ← registra o pedido no dashboard do lojista
         ↓
-7. [Webhook recebido] order.status_changed  ← lojista atualizou status
+7a. [Webhook recebido] order.status_changed  ← lojista atualizou status
         ↓
-8. Agente notifica o cliente via WhatsApp
+7b. [Webhook recebido] order.items_updated   ← atendente editou itens do pedido
+        ↓
+8. Agente notifica o cliente via WhatsApp usando instance_name + customer.whatsapp
 ```
 
 ---
@@ -54,7 +70,24 @@ Nunca commitar a chave no repositório.
 
 **Resposta 200:**
 ```json
-{ "found": true, "customer": { "id": "...", "nome": "João Silva", "whatsapp": "5531999990000" } }
+{
+  "found": true,
+  "customer": {
+    "id": "uuid",
+    "nome": "João Silva",
+    "whatsapp": "5531999990000",
+    "cep": "37062683",
+    "logradouro": "Av. do Contorno",
+    "numero": "40",
+    "complemento": null,
+    "bairro": "Santa Luiza",
+    "cidade": "Varginha",
+    "estado": "MG",
+    "lat": -21.5512,
+    "lng": -45.4333,
+    "created_at": "2026-03-20T12:00:00Z"
+  }
+}
 ```
 Se não encontrado: `{ "found": false, "customer": null }`
 
@@ -81,26 +114,52 @@ Upsert por `whatsapp` + organização. Use para novos clientes ou atualização 
 
 **Resposta 201:** `{ "customer": { ...dados } }`
 
+> O geocoding de lat/lng acontece automaticamente via trigger.
+
 ---
 
 ### `GET /products` — Consultar estoque
 
-| Parâmetro | Tipo | Padrão | Descrição |
-|---|---|---|---|
-| `store_id` | uuid | — | ✅ Obrigatório |
-| `search` | string | — | Busca textual na descrição |
-| `group_id` | uuid | — | Filtrar por categoria |
-| `in_stock` | boolean | `false` | Somente com quantidade > 0 |
+Busca produtos da organização. Pode filtrar por loja específica ou retornar o catálogo inteiro da org.
 
-**Resposta 200:**
+| Parâmetro | Tipo | Obrigatório | Descrição |
+|---|---|---|---|
+| `organization_id` | uuid | ⚠️ | ID da org — obrigatório para o agente quando `store_id` não for informado |
+| `store_id` | uuid | ⚠️ | Filtrar por loja específica (opcional) |
+| `search` | string | — | Busca textual na descrição (case-insensitive) |
+| `group_id` | uuid | — | Filtrar por categoria |
+| `in_stock` | boolean | — | Se `true`, retorna apenas quantidade > 0 (padrão: `false`) |
+
+> ⚠️ Para o agente: informe `organization_id` **ou** `store_id`. Se ambos forem omitidos, retorna erro 400.
+
+**Resposta 200 (toda a org):**
 ```json
 {
-  "store": { "id": "uuid", "nome": "Loja Centro" },
-  "total": 1,
-  "products": [{ "id": "uuid", "descricao": "Café Especial 250g", "quantidade": 48, "valor_venda": 32.90 }],
-  "groups": [{ "id": "uuid", "nome": "Cafés" }]
+  "organization_id": "f988b66e-21e6-48d5-a90d-08f746600763",
+  "total": 3,
+  "products": [
+    {
+      "id": "uuid",
+      "store_id": "uuid-da-loja",
+      "store_nome": "Varginha",
+      "legacy_id": null,
+      "descricao": "Café Especial 250g",
+      "unidade_medida": "CX",
+      "quantidade": 48,
+      "valor_venda": 32.90,
+      "updated_at": "2026-03-20T10:00:00Z",
+      "group": { "id": "uuid", "nome": "Cafés" }
+    }
+  ],
+  "groups": [
+    { "id": "uuid", "nome": "Cafés", "store_id": "uuid-da-loja" }
+  ]
 }
 ```
+
+**Resposta 200 (com `store_id`):** inclui adicionalmente o campo `store: { id, nome }`.
+
+> Cada produto retorna `store_id` e `store_nome` para identificar a qual loja pertence.
 
 ---
 
@@ -114,17 +173,26 @@ Upsert por `whatsapp` + organização. Use para novos clientes ou atualização 
 **Resposta 200:**
 ```json
 {
+  "organization_id": "f988b66e-21e6-48d5-a90d-08f746600763",
+  "instance_name": "pedii_f988b66e",
+  "customer": {
+    "id": "uuid",
+    "nome": "João Silva",
+    "whatsapp": "5531999990000"
+  },
   "dentro_raio": true,
   "distancia_km": 3.24,
   "raio_entrega_km": 5.0,
   "valor_frete": 9.72,
   "frete_gratis": false,
   "pedido_minimo_entrega": 30.00,
-  "frete_gratis_acima_de": 100.00
+  "frete_gratis_acima_de": 100.00,
+  "_geocodificado": { "loja": false, "cliente": false }
 }
 ```
 
 > Se `dentro_raio: false`, informar ao cliente que a loja não entrega no endereço dele.
+> O campo `customer.whatsapp` pode ser usado para confirmar o número do cliente no conversacional.
 
 ---
 
@@ -145,7 +213,38 @@ Upsert por `whatsapp` + organização. Use para novos clientes ou atualização 
 }
 ```
 
-**Resposta 201:** `{ "order": { "id": "uuid", "status": "open", "total": 75.52, ... } }`
+**Resposta 201:**
+```json
+{
+  "organization_id": "f988b66e-21e6-48d5-a90d-08f746600763",
+  "instance_name": "pedii_f988b66e",
+  "order": {
+    "id": "uuid",
+    "status": "open",
+    "total": 75.52,
+    "customers": { "id": "uuid", "nome": "João Silva", "whatsapp": "5531999990000" },
+    "stores": { "id": "uuid", "apelido": "Varginha" },
+    "order_items": [ ... ]
+  }
+}
+```
+
+**Resposta 422 — estoque insuficiente:**
+```json
+{
+  "error": "Estoque insuficiente para um ou mais produtos",
+  "itens_com_erro": [
+    {
+      "product_id": "uuid",
+      "descricao": "Café Especial 250g",
+      "disponivel": 3,
+      "solicitado": 10
+    }
+  ]
+}
+```
+
+> A validação de estoque é aplicada tanto na API quanto via trigger no banco. Não é possível criar pedidos com quantidade superior ao estoque disponível.
 
 ---
 
@@ -155,7 +254,7 @@ Upsert por `whatsapp` + organização. Use para novos clientes ou atualização 
 |---|---|---|
 | `store_id` | uuid | ✅ Obrigatório para listagem |
 | `id` | uuid | Buscar pedido único (retorna itens completos) |
-| `status` | string | Filtrar por status |
+| `status` | string | Filtrar por status (`open`, `accepted`, `shipped`, `received`, `cancelled`) |
 | `customer_id` | uuid | Filtrar por cliente |
 | `date_from` | date | Data inicial (`2026-03-01`) |
 | `date_to` | date | Data final (`2026-03-31`) |
@@ -164,39 +263,111 @@ Upsert por `whatsapp` + organização. Use para novos clientes ou atualização 
 
 **Resposta 200 (listagem):**
 ```json
-{ "orders": [...], "total": 10, "page": 1, "limit": 50 }
+{
+  "organization_id": "uuid",
+  "instance_name": "pedii_f988b66e",
+  "orders": [ ... ],
+  "total": 10,
+  "page": 1,
+  "limit": 50
+}
+```
+
+**Resposta 200 (pedido único com `id`):**
+```json
+{
+  "organization_id": "uuid",
+  "instance_name": "pedii_f988b66e",
+  "order": {
+    "id": "uuid",
+    "status": "accepted",
+    "total": 310.00,
+    "customers": { "id": "uuid", "nome": "Eloá Mariane", "whatsapp": "35982721736" },
+    "stores": { ... },
+    "order_items": [ ... ]
+  }
+}
 ```
 
 ---
 
-### `PATCH /orders` — Atualizar status ou adicionar itens
+### `PATCH /orders` — Atualizar status ou editar itens
 
-**Atualizar status:**
+Três ações disponíveis via `action`:
+
+#### `update_status` — Avançar status do pedido
+
 ```json
 { "id": "uuid-do-pedido", "action": "update_status", "status": "accepted" }
 ```
 
-**Adicionar itens:**
-```json
-{
-  "id": "uuid-do-pedido",
-  "action": "add_items",
-  "items": [{ "product_id": "uuid", "quantity": 1, "unit_price": 20.00 }]
-}
-```
-
 **Máquina de estados:**
 ```
-open → accepted | cancelled
-accepted → shipped | cancelled
-shipped → received | cancelled
-received → (terminal)
+open      → accepted | cancelled
+accepted  → shipped  | cancelled
+shipped   → received | cancelled
+received  → (terminal)
 cancelled → (terminal)
 ```
 
 **Resposta 422** se a transição não for válida:
 ```json
 { "error": "Transição inválida: received → cancelled", "allowed": [] }
+```
+
+---
+
+#### `add_items` — Adicionar itens ao pedido
+
+Disponível para pedidos com status `open` ou `accepted`.
+
+```json
+{
+  "id": "uuid-do-pedido",
+  "action": "add_items",
+  "items": [
+    { "product_id": "uuid", "quantity": 1, "unit_price": 20.00 }
+  ]
+}
+```
+
+---
+
+#### `edit_items` — Editar itens do pedido (antes de aceitar)
+
+Permite ao atendente incluir, remover ou ajustar quantidades de itens em pedidos `open` ou `accepted` **numa única chamada**. Disparado geralmente antes de aceitar um pedido onde algum item está sem estoque.
+
+Após a edição, o Pedii envia o webhook `order.items_updated` ao agente para que ele comunique as mudanças ao cliente.
+
+```json
+{
+  "id": "uuid-do-pedido",
+  "action": "edit_items",
+  "items_to_add": [
+    { "product_id": "uuid", "quantity": 2, "unit_price": 15.00 }
+  ],
+  "items_to_remove": ["uuid-do-item-1", "uuid-do-item-2"],
+  "items_to_update": [
+    { "item_id": "uuid-do-item-3", "quantity": 5 }
+  ]
+}
+```
+
+| Campo | Descrição |
+|---|---|
+| `items_to_add` | Novos itens a inserir no pedido (valida estoque) |
+| `items_to_remove` | IDs de `order_items` a remover (estoque é restaurado) |
+| `items_to_update` | Ajuste de quantidade de itens existentes (valida delta de estoque) |
+
+> Todos os três campos são opcionais, mas ao menos um deve ter conteúdo.
+
+**Resposta 200:**
+```json
+{
+  "organization_id": "uuid",
+  "instance_name": "pedii_f988b66e",
+  "order": { /* pedido completo com itens atualizados */ }
+}
 ```
 
 ---
@@ -213,10 +384,13 @@ Authorization: Bearer <AGENT_API_KEY>
 x-internal-secret: <INTERNAL_WEBHOOK_SECRET>
 ```
 
+---
+
 ### Evento: `order.status_changed`
 
 Disparado quando o lojista muda o status de um pedido pelo dashboard.
-> Mudanças feitas pelo próprio agente via `PATCH /orders` **não** disparam este evento.
+
+> ⚠️ Mudanças feitas pelo próprio agente via `PATCH /orders` **não** disparam este evento (evita loop).
 
 **Payload:**
 ```json
@@ -226,15 +400,21 @@ Disparado quando o lojista muda o status de um pedido pelo dashboard.
   "old_status": "open",
   "new_status": "accepted",
   "organization_id": "f988b66e-21e6-48d5-a90d-08f746600763",
+  "instance_name": "pedii_f988b66e",
   "order": {
     "id": "83781578-c102-4bd3-8f22-9ea6167887aa",
     "status": "accepted",
     "total": 310.00,
     "shipping_value": 10.00,
     "stores": { "apelido": "Paraguaçu", "razao_social": "TM Farma - Paraguaçu" },
-    "customers": { "nome": "Eloá Mariane da Luz", "whatsapp": "(35) 98272-1736" },
+    "customers": { "nome": "Eloá Mariane da Luz", "whatsapp": "35982721736" },
     "order_items": [
-      { "quantity": 15, "unit_price": 20.00, "subtotal": 300.00, "products": { "descricao": "Produto Teste Paraguaçu" } }
+      {
+        "quantity": 15,
+        "unit_price": 20.00,
+        "subtotal": 300.00,
+        "products": { "descricao": "Produto Teste Paraguaçu" }
+      }
     ]
   }
 }
@@ -251,15 +431,68 @@ Disparado quando o lojista muda o status de um pedido pelo dashboard.
 
 ---
 
+### Evento: `order.items_updated`
+
+Disparado quando o **atendente no dashboard** edita os itens de um pedido `open` antes de aceitá-lo (via `PATCH /orders` com `action: edit_items`).
+
+O agente deve usar este evento para comunicar ao cliente final as alterações realizadas (ex: remoção de item sem estoque, substituição de produto, ajuste de quantidade).
+
+**Payload:**
+```json
+{
+  "event": "order.items_updated",
+  "order_id": "83781578-c102-4bd3-8f22-9ea6167887aa",
+  "organization_id": "f988b66e-21e6-48d5-a90d-08f746600763",
+  "instance_name": "pedii_f988b66e",
+  "changes": {
+    "items_added": [
+      { "product_id": "uuid", "quantity": 2, "unit_price": 15.00 }
+    ],
+    "items_removed": ["uuid-do-item-removido"],
+    "items_updated": [
+      { "item_id": "uuid-do-item", "quantity": 3 }
+    ]
+  },
+  "order": {
+    "id": "83781578-c102-4bd3-8f22-9ea6167887aa",
+    "status": "open",
+    "total": 95.52,
+    "stores": { "apelido": "Varginha" },
+    "customers": { "nome": "João Silva", "whatsapp": "5531999990000" },
+    "order_items": [ /* lista completa e atualizada */ ]
+  }
+}
+```
+
+> O campo `order.order_items` reflete o estado final do pedido após todas as alterações.
+> Use `changes` para construir uma mensagem legível ao cliente descrevendo o que foi modificado.
+
+---
+
+## Comportamento de estoque (automático)
+
+Todos os updates de estoque são gerenciados automaticamente por triggers no banco:
+
+| Evento | Impacto no estoque |
+|---|---|
+| Item adicionado ao pedido (INSERT) | Estoque reduzido |
+| Item removido do pedido (DELETE) | Estoque restaurado |
+| Quantidade do item alterada (UPDATE) | Ajuste proporcional (delta) |
+| Pedido cancelado | Estoque de todos os itens restaurado |
+
+A validação de estoque é aplicada no INSERT (trigger `BEFORE INSERT`) e na API antes de qualquer operação — impossibilitando criar ou editar itens com quantidade superior ao disponível.
+
+---
+
 ## Códigos de erro
 
 | Status | Significado |
 |---|---|
 | `400` | Parâmetros obrigatórios ausentes ou inválidos |
 | `401` | Token ausente ou inválido |
-| `403` | Loja e cliente de organizações diferentes |
+| `403` | Acesso negado (ex: loja de outra organização) |
 | `404` | Recurso não encontrado |
-| `422` | Transição inválida ou endereço insuficiente para geocodificar |
+| `422` | Transição de status inválida; estoque insuficiente; endereço insuficiente para geocodificar |
 | `500` | Erro interno |
 
 ---

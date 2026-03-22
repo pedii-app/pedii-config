@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Pedii Agent API
-  version: 2.0.0
+  version: 3.0.0
   description: |
     APIs utilizadas pelo agente de vendas WhatsApp do Pedii.
     Todas as rotas requerem autenticação via Bearer token.
@@ -17,6 +17,11 @@ info:
     ```
     https://qiqwylcjoyztqebqglok.supabase.co/functions/v1
     ```
+
+    ## Campos presentes em todas as respostas
+    Toda resposta bem-sucedida inclui:
+    - `organization_id` (uuid): ID da organização (tenant raiz do Pedii)
+    - `instance_name` (string | null): Nome da instância WhatsApp conectada na Evolution API
 
     ## Webhooks recebidos pelo agente
     O Pedii envia eventos ao agente quando ações ocorrem no dashboard do lojista.
@@ -38,6 +43,27 @@ components:
       description: AGENT_API_KEY armazenada no GCP Secret Manager
 
   schemas:
+    # ─────────────────────────────────────────────────────────────────────────
+    # Envelope de contexto presente em todas as respostas
+    # ─────────────────────────────────────────────────────────────────────────
+    OrgContext:
+      type: object
+      description: Campos de contexto presentes em todas as respostas bem-sucedidas
+      properties:
+        organization_id:
+          type: string
+          format: uuid
+          description: ID da organização (tenant raiz)
+          example: "f988b66e-21e6-48d5-a90d-08f746600763"
+        instance_name:
+          type: string
+          nullable: true
+          description: Nome da instância WhatsApp conectada na Evolution API
+          example: "pedii_f988b66e"
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Customer
+    # ─────────────────────────────────────────────────────────────────────────
     Customer:
       type: object
       properties:
@@ -80,12 +106,38 @@ components:
           type: string
           format: date-time
 
+    CustomerSummary:
+      type: object
+      description: Resumo do cliente embutido nas respostas de pedido e frete
+      properties:
+        id:
+          type: string
+          format: uuid
+        nome:
+          type: string
+        whatsapp:
+          type: string
+          description: Número normalizado (somente dígitos)
+          example: "5531999990000"
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Product
+    # ─────────────────────────────────────────────────────────────────────────
     Product:
       type: object
       properties:
         id:
           type: string
           format: uuid
+        store_id:
+          type: string
+          format: uuid
+          description: ID da loja à qual o produto pertence
+        store_nome:
+          type: string
+          nullable: true
+          description: Nome da loja (apelido ou razão social). Útil na busca multi-loja.
+          example: "Varginha"
         legacy_id:
           type: string
           nullable: true
@@ -119,6 +171,9 @@ components:
               type: string
               example: Cafés
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # Order
+    # ─────────────────────────────────────────────────────────────────────────
     OrderItem:
       type: object
       properties:
@@ -139,6 +194,9 @@ components:
           type: number
           format: double
           example: 65.80
+        created_at:
+          type: string
+          format: date-time
         products:
           type: object
           nullable: true
@@ -185,7 +243,7 @@ components:
         total:
           type: number
           format: double
-          description: Total dos itens + frete
+          description: Total dos itens + frete (calculado automaticamente)
         shipping_value:
           type: number
           format: double
@@ -200,6 +258,9 @@ components:
         agent_created:
           type: boolean
           description: True se o pedido foi criado pelo agente via API
+        status_changed_by_agent:
+          type: boolean
+          description: True se o último update de status foi feito pelo agente (previne loop de webhook)
         created_by:
           type: string
           format: uuid
@@ -238,60 +299,61 @@ components:
             apelido:
               type: string
         customers:
-          type: object
-          nullable: true
-          properties:
-            id:
-              type: string
-              format: uuid
-            nome:
-              type: string
-            whatsapp:
-              type: string
+          $ref: "#/components/schemas/CustomerSummary"
         order_items:
           type: array
           items:
             $ref: "#/components/schemas/OrderItem"
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # Freight
+    # ─────────────────────────────────────────────────────────────────────────
     FreteResult:
-      type: object
-      properties:
-        dentro_raio:
-          type: boolean
-          description: Se o cliente está dentro do raio de entrega da loja
-        distancia_km:
-          type: number
-          description: Distância em km entre loja e cliente (Haversine)
-          example: 3.24
-        raio_entrega_km:
-          type: number
-          description: Raio máximo de entrega configurado na loja
-          example: 5.0
-        valor_frete:
-          type: number
-          description: Valor do frete em BRL. Zero se frete grátis ou fora do raio.
-          example: 9.72
-        frete_gratis:
-          type: boolean
-          description: True se o frete foi zerado por regra de negócio
-        pedido_minimo_entrega:
-          type: number
-          description: Valor mínimo do pedido para habilitar entrega. Zero = sem mínimo.
-          example: 30.00
-        frete_gratis_acima_de:
-          type: number
-          nullable: true
-          description: Valor do pedido para ganhar frete grátis. Null = regra desativada.
-          example: 100.00
-        _geocodificado:
-          type: object
-          description: Indica se lat/lng foi calculado nesta chamada (lazy geocoding)
+      allOf:
+        - $ref: "#/components/schemas/OrgContext"
+        - type: object
           properties:
-            loja:
+            customer:
+              $ref: "#/components/schemas/CustomerSummary"
+            dentro_raio:
               type: boolean
-            cliente:
+              description: Se o cliente está dentro do raio de entrega da loja
+            distancia_km:
+              type: number
+              description: Distância em km entre loja e cliente (Haversine)
+              example: 3.24
+            raio_entrega_km:
+              type: number
+              description: Raio máximo de entrega configurado na loja
+              example: 5.0
+            valor_frete:
+              type: number
+              description: Valor do frete em BRL. Zero se frete grátis ou fora do raio.
+              example: 9.72
+            frete_gratis:
               type: boolean
+              description: True se o frete foi zerado por regra de negócio
+            pedido_minimo_entrega:
+              type: number
+              description: Valor mínimo do pedido para habilitar entrega. Zero = sem mínimo.
+              example: 30.00
+            frete_gratis_acima_de:
+              type: number
+              nullable: true
+              description: Valor do pedido para ganhar frete grátis. Null = regra desativada.
+              example: 100.00
+            _geocodificado:
+              type: object
+              description: Indica se lat/lng foi calculado nesta chamada (lazy geocoding)
+              properties:
+                loja:
+                  type: boolean
+                cliente:
+                  type: boolean
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # Errors
+    # ─────────────────────────────────────────────────────────────────────────
     Error:
       type: object
       properties:
@@ -301,10 +363,46 @@ components:
           type: string
           nullable: true
 
+    StockValidationError:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "Estoque insuficiente para um ou mais produtos"
+        itens_com_erro:
+          type: array
+          items:
+            type: object
+            properties:
+              product_id:
+                type: string
+                format: uuid
+              descricao:
+                type: string
+                example: "Café Especial 250g"
+              disponivel:
+                type: number
+                example: 3
+              solicitado:
+                type: number
+                example: 10
+
+    StatusTransitionError:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "Transição inválida: received → cancelled"
+        allowed:
+          type: array
+          items:
+            type: string
+          example: []
+
 paths:
-  # ────────────────────────────────────────────────────────────────────────────
+  # ──────────────────────────────────────────────────────────────────────────
   # CUSTOMERS
-  # ────────────────────────────────────────────────────────────────────────────
+  # ──────────────────────────────────────────────────────────────────────────
   /customers:
     get:
       operationId: buscarCliente
@@ -345,8 +443,24 @@ paths:
                     oneOf:
                       - $ref: "#/components/schemas/Customer"
                       - type: "null"
+              examples:
+                encontrado:
+                  summary: Cliente encontrado
+                  value:
+                    found: true
+                    customer:
+                      id: "3ed79bc1-c2f1-4c5c-95e4-d9fa1a212b4c"
+                      nome: "João Silva"
+                      whatsapp: "5531999990000"
+                      cidade: "Varginha"
+                      estado: "MG"
+                nao_encontrado:
+                  summary: Cliente não encontrado
+                  value:
+                    found: false
+                    customer: null
         "400":
-          description: Parâmetros inválidos
+          description: Parâmetros inválidos (store_id ausente ou nenhum filtro informado)
         "401":
           description: Token inválido ou ausente
         "404":
@@ -411,20 +525,40 @@ paths:
         "404":
           description: Loja não encontrada
 
-  # ────────────────────────────────────────────────────────────────────────────
+  # ──────────────────────────────────────────────────────────────────────────
   # PRODUCTS
-  # ────────────────────────────────────────────────────────────────────────────
+  # ──────────────────────────────────────────────────────────────────────────
   /products:
     get:
       operationId: consultarEstoque
-      summary: Consultar produtos em estoque de uma loja
+      summary: Consultar produtos em estoque
+      description: |
+        Busca produtos da organização. Pode filtrar por loja específica (`store_id`) ou retornar
+        o catálogo inteiro da org (`organization_id`).
+
+        **Para o agente:** informe `organization_id` **ou** `store_id`. Se ambos forem omitidos, retorna 400.
+
+        Cada produto retorna `store_id` e `store_nome` para identificar a qual loja pertence,
+        especialmente útil na busca multi-loja.
+
+        Os resultados são ordenados alfabeticamente por `descricao`.
       parameters:
-        - name: store_id
+        - name: organization_id
           in: query
-          required: true
           schema:
             type: string
             format: uuid
+          description: |
+            ID da organização. Obrigatório para o agente quando `store_id` não for informado.
+            Retorna produtos de todas as lojas da org.
+        - name: store_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: |
+            Filtrar por loja específica (opcional). Quando presente, restringe os resultados
+            e inclui o campo `store` na raiz da resposta.
         - name: search
           in: query
           schema:
@@ -448,42 +582,105 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  store:
-                    type: object
+                allOf:
+                  - type: object
                     properties:
-                      id:
+                      organization_id:
                         type: string
                         format: uuid
-                      nome:
-                        type: string
-                  total:
-                    type: integer
-                  products:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/Product"
-                  groups:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        id:
-                          type: string
-                          format: uuid
-                        nome:
-                          type: string
+                      store:
+                        type: object
+                        nullable: true
+                        description: Presente apenas quando store_id foi informado
+                        properties:
+                          id:
+                            type: string
+                            format: uuid
+                          nome:
+                            type: string
+                      total:
+                        type: integer
+                      products:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Product"
+                      groups:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                              format: uuid
+                            nome:
+                              type: string
+                            store_id:
+                              type: string
+                              format: uuid
+              examples:
+                org_wide:
+                  summary: Todos os produtos da org (sem store_id)
+                  value:
+                    organization_id: "f988b66e-21e6-48d5-a90d-08f746600763"
+                    total: 2
+                    products:
+                      - id: "d5fbd8da-de30-43f8-ba35-99ff2758ed32"
+                        store_id: "4d22e5f2-8138-4a67-9446-88d46ed4ee0c"
+                        store_nome: "Varginha"
+                        descricao: "Café Especial 250g"
+                        unidade_medida: "CX"
+                        quantidade: 48
+                        valor_venda: 32.90
+                        group:
+                          id: "uuid"
+                          nome: "Cafés"
+                      - id: "a1b2c3d4-0000-0000-0000-000000000001"
+                        store_id: "ee4d2a74-25fd-4432-91a8-96121c6bf64e"
+                        store_nome: "Paraguaçu"
+                        descricao: "Produto Teste"
+                        unidade_medida: "UN"
+                        quantidade: 10
+                        valor_venda: 20.00
+                        group: null
+                    groups:
+                      - id: "uuid"
+                        nome: "Cafés"
+                        store_id: "4d22e5f2-8138-4a67-9446-88d46ed4ee0c"
+                by_store:
+                  summary: Produtos de uma loja específica (com store_id)
+                  value:
+                    organization_id: "f988b66e-21e6-48d5-a90d-08f746600763"
+                    store:
+                      id: "4d22e5f2-8138-4a67-9446-88d46ed4ee0c"
+                      nome: "Varginha"
+                    total: 1
+                    products:
+                      - id: "d5fbd8da-de30-43f8-ba35-99ff2758ed32"
+                        store_id: "4d22e5f2-8138-4a67-9446-88d46ed4ee0c"
+                        store_nome: "Varginha"
+                        descricao: "Café Especial 250g"
+                        unidade_medida: "CX"
+                        quantidade: 48
+                        valor_venda: 32.90
+                        group:
+                          id: "uuid"
+                          nome: "Cafés"
+                    groups:
+                      - id: "uuid"
+                        nome: "Cafés"
+                        store_id: "4d22e5f2-8138-4a67-9446-88d46ed4ee0c"
         "400":
-          description: store_id não informado
+          description: "Agente não informou organization_id nem store_id"
         "401":
           description: Token inválido
+        "403":
+          description: Usuário JWT tentando acessar loja de outra organização
         "404":
           description: Loja não encontrada
 
-  # ────────────────────────────────────────────────────────────────────────────
+  # ──────────────────────────────────────────────────────────────────────────
   # CALCULATE FREIGHT
-  # ────────────────────────────────────────────────────────────────────────────
+  # ──────────────────────────────────────────────────────────────────────────
   /calculate-freight:
     post:
       operationId: calcularFrete
@@ -495,10 +692,13 @@ paths:
         **Lazy geocoding:** se loja ou cliente ainda não têm lat/lng, a função geocodifica
         automaticamente e persiste as coordenadas para chamadas futuras.
 
-        **Lógica:**
+        **Lógica de cálculo:**
         1. `distancia_km × valor_por_km` = valor base
         2. Se valor base < `valor_minimo` → usa `valor_minimo`
         3. Se valor do pedido ≥ `frete_gratis_acima_de` → `valor_frete = 0`
+        4. Se `dentro_raio = false` → `valor_frete = 0` (não entrega)
+
+        A resposta inclui `customer.whatsapp` para confirmar o número do cliente.
       requestBody:
         required: true
         content:
@@ -529,6 +729,12 @@ paths:
                 dentro_raio:
                   summary: Cliente dentro do raio
                   value:
+                    organization_id: "f988b66e-21e6-48d5-a90d-08f746600763"
+                    instance_name: "pedii_f988b66e"
+                    customer:
+                      id: "3ed79bc1-c2f1-4c5c-95e4-d9fa1a212b4c"
+                      nome: "João Silva"
+                      whatsapp: "5531999990000"
                     dentro_raio: true
                     distancia_km: 3.24
                     raio_entrega_km: 5.0
@@ -542,6 +748,12 @@ paths:
                 fora_do_raio:
                   summary: Cliente fora do raio
                   value:
+                    organization_id: "f988b66e-21e6-48d5-a90d-08f746600763"
+                    instance_name: "pedii_f988b66e"
+                    customer:
+                      id: "3ed79bc1-c2f1-4c5c-95e4-d9fa1a212b4c"
+                      nome: "João Silva"
+                      whatsapp: "5531999990000"
                     dentro_raio: false
                     distancia_km: 8.51
                     raio_entrega_km: 5.0
@@ -551,7 +763,7 @@ paths:
                     frete_gratis_acima_de: null
                     _geocodificado:
                       loja: false
-                      cliente: false
+                      cliente: true
         "400":
           description: Parâmetros ausentes
         "401":
@@ -563,9 +775,9 @@ paths:
         "422":
           description: Não foi possível geocodificar (endereço incompleto)
 
-  # ────────────────────────────────────────────────────────────────────────────
+  # ──────────────────────────────────────────────────────────────────────────
   # ORDERS
-  # ────────────────────────────────────────────────────────────────────────────
+  # ──────────────────────────────────────────────────────────────────────────
   /orders:
     get:
       operationId: consultarPedidos
@@ -575,6 +787,8 @@ paths:
 
         Para buscar um pedido único (com itens e produtos), passe apenas `id` como parâmetro.
         Para listar, passe `store_id` e os filtros desejados.
+
+        Todas as respostas incluem `organization_id`, `instance_name` e `customers.whatsapp`.
       parameters:
         - name: store_id
           in: query
@@ -630,28 +844,34 @@ paths:
             application/json:
               schema:
                 oneOf:
-                  - type: object
-                    description: Listagem paginada
-                    properties:
-                      orders:
-                        type: array
-                        items:
-                          $ref: "#/components/schemas/Order"
-                      total:
-                        type: integer
-                      page:
-                        type: integer
-                      limit:
-                        type: integer
-                  - type: object
-                    description: Pedido único (quando id é informado)
-                    properties:
-                      order:
-                        $ref: "#/components/schemas/Order"
+                  - allOf:
+                      - $ref: "#/components/schemas/OrgContext"
+                      - type: object
+                        description: Listagem paginada
+                        properties:
+                          orders:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/Order"
+                          total:
+                            type: integer
+                          page:
+                            type: integer
+                          limit:
+                            type: integer
+                  - allOf:
+                      - $ref: "#/components/schemas/OrgContext"
+                      - type: object
+                        description: Pedido único (quando id é informado)
+                        properties:
+                          order:
+                            $ref: "#/components/schemas/Order"
               examples:
                 listagem:
                   summary: Listagem paginada
                   value:
+                    organization_id: "f988b66e-21e6-48d5-a90d-08f746600763"
+                    instance_name: "pedii_f988b66e"
                     orders:
                       - id: "83781578-c102-4bd3-8f22-9ea6167887aa"
                         status: open
@@ -665,13 +885,15 @@ paths:
                         customers:
                           id: "3ed79bc1-c2f1-4c5c-95e4-d9fa1a212b4c"
                           nome: Eloá Mariane da Luz
-                          whatsapp: "(35) 98272-1736"
+                          whatsapp: "35982721736"
                     total: 1
                     page: 1
                     limit: 50
                 pedido_unico:
                   summary: Pedido único com itens
                   value:
+                    organization_id: "f988b66e-21e6-48d5-a90d-08f746600763"
+                    instance_name: "pedii_f988b66e"
                     order:
                       id: "83781578-c102-4bd3-8f22-9ea6167887aa"
                       status: accepted
@@ -682,14 +904,14 @@ paths:
                       agent_created: true
                       accepted_at: "2026-03-20T15:10:00Z"
                       stores:
-                        id: "4d22e5f2-..."
+                        id: "4d22e5f2-8138-4a67-9446-88d46ed4ee0c"
                         apelido: Paraguaçu
                       customers:
-                        id: "3ed79bc1-..."
+                        id: "3ed79bc1-c2f1-4c5c-95e4-d9fa1a212b4c"
                         nome: Eloá Mariane da Luz
-                        whatsapp: "(35) 98272-1736"
+                        whatsapp: "35982721736"
                       order_items:
-                        - id: "3026e0e8-..."
+                        - id: "3026e0e8-2f9f-4381-842d-054d01db7a40"
                           quantity: 15
                           unit_price: 20.00
                           subtotal: 300.00
@@ -697,7 +919,7 @@ paths:
                             descricao: Produto Teste Paraguaçu
                             unidade_medida: UN
         "400":
-          description: store_id não informado
+          description: store_id não informado (listagem)
         "401":
           description: Token inválido
         "404":
@@ -712,6 +934,9 @@ paths:
 
         O campo `shipping_*` deve ser preenchido com o resultado de `POST /calculate-freight`.
         O total do pedido é calculado automaticamente pelo banco (itens + frete).
+
+        **Validação de estoque:** se qualquer item tiver quantidade superior ao estoque disponível,
+        retorna 422 com a lista de itens com erro. A criação é bloqueada até o estoque ser suficiente.
       requestBody:
         required: true
         content:
@@ -741,11 +966,9 @@ paths:
                   type: number
                   format: double
                   nullable: true
-                  description: Distância calculada em km
                 shipping_within_radius:
                   type: boolean
                   nullable: true
-                  description: Se o cliente estava dentro do raio no momento do pedido
                 items:
                   type: array
                   description: Itens do pedido (opcional na criação, pode ser adicionado via PATCH)
@@ -783,34 +1006,66 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  order:
-                    $ref: "#/components/schemas/Order"
-        "207":
-          description: Pedido criado mas houve erro ao inserir os itens
+                allOf:
+                  - $ref: "#/components/schemas/OrgContext"
+                  - type: object
+                    properties:
+                      order:
+                        $ref: "#/components/schemas/Order"
         "400":
           description: Campos obrigatórios ausentes
         "401":
           description: Token inválido
         "404":
           description: Loja ou cliente não encontrado
+        "422":
+          description: Estoque insuficiente para um ou mais itens
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StockValidationError"
+              example:
+                error: "Estoque insuficiente para um ou mais produtos"
+                itens_com_erro:
+                  - product_id: "d5fbd8da-de30-43f8-ba35-99ff2758ed32"
+                    descricao: "Café Especial 250g"
+                    disponivel: 3
+                    solicitado: 10
 
     patch:
       operationId: atualizarPedido
-      summary: Atualizar status ou adicionar itens ao pedido
+      summary: Atualizar status ou editar itens do pedido
       description: |
-        Duas ações disponíveis via `action`:
+        Três ações disponíveis via campo `action`:
+
+        ---
 
         **`update_status`** (padrão): Avança o status do pedido conforme a máquina de estados.
+        Mudanças feitas pelo agente **não** disparam o webhook `order.status_changed` (evita loop).
         Transições válidas:
         - `open → accepted | cancelled`
         - `accepted → shipped | cancelled`
         - `shipped → received | cancelled`
         - `received` e `cancelled` são estados terminais
 
-        **`add_items`**: Adiciona novos itens a um pedido em aberto (`open`) ou aceito (`accepted`).
-        O total é recalculado automaticamente pelo banco.
+        ---
+
+        **`add_items`**: Adiciona novos itens a um pedido `open` ou `accepted`.
+        Valida estoque antes de inserir. O total é recalculado automaticamente.
+
+        ---
+
+        **`edit_items`**: Edição completa de itens (adicionar, remover, ajustar quantidades)
+        em uma única chamada atômica. Disponível somente para pedidos `open` ou `accepted`.
+
+        Após a operação, dispara o webhook `order.items_updated` ao agente com o resumo
+        das alterações e o pedido completo atualizado.
+
+        Casos de uso:
+        - Atendente remove item sem estoque antes de aceitar
+        - Atendente substitui produto por similar disponível
+        - Atendente ajusta quantidade de um item
+
       requestBody:
         required: true
         content:
@@ -826,15 +1081,17 @@ paths:
                   description: ID do pedido
                 action:
                   type: string
-                  enum: [update_status, add_items]
+                  enum: [update_status, add_items, edit_items]
                   default: update_status
+                # update_status
                 status:
                   type: string
                   enum: [accepted, shipped, received, cancelled]
-                  description: Novo status (obrigatório para action=update_status)
+                  description: "Novo status (obrigatório para action=update_status)"
+                # add_items
                 items:
                   type: array
-                  description: Itens a adicionar (obrigatório para action=add_items)
+                  description: "Itens a adicionar (obrigatório para action=add_items)"
                   items:
                     type: object
                     required:
@@ -850,6 +1107,47 @@ paths:
                       unit_price:
                         type: number
                         format: double
+                # edit_items
+                items_to_add:
+                  type: array
+                  description: "Novos itens a inserir no pedido (action=edit_items)"
+                  items:
+                    type: object
+                    required:
+                      - product_id
+                      - quantity
+                      - unit_price
+                    properties:
+                      product_id:
+                        type: string
+                        format: uuid
+                      quantity:
+                        type: number
+                      unit_price:
+                        type: number
+                        format: double
+                items_to_remove:
+                  type: array
+                  description: "IDs de order_items a remover (action=edit_items). Estoque é restaurado."
+                  items:
+                    type: string
+                    format: uuid
+                items_to_update:
+                  type: array
+                  description: "Ajustes de quantidade em itens existentes (action=edit_items)"
+                  items:
+                    type: object
+                    required:
+                      - item_id
+                      - quantity
+                    properties:
+                      item_id:
+                        type: string
+                        format: uuid
+                        description: ID do order_item (não do produto)
+                      quantity:
+                        type: number
+                        description: Nova quantidade total (valida delta vs estoque disponível)
             examples:
               update_status:
                 summary: Aceitar pedido
@@ -866,16 +1164,32 @@ paths:
                     - product_id: "d5fbd8da-de30-43f8-ba35-99ff2758ed32"
                       quantity: 1
                       unit_price: 20.00
+              edit_items:
+                summary: Editar itens (remover 1, ajustar qty de outro, adicionar novo)
+                value:
+                  id: "83781578-c102-4bd3-8f22-9ea6167887aa"
+                  action: edit_items
+                  items_to_remove:
+                    - "3026e0e8-2f9f-4381-842d-054d01db7a40"
+                  items_to_update:
+                    - item_id: "a1b2c3d4-0000-0000-0000-000000000002"
+                      quantity: 3
+                  items_to_add:
+                    - product_id: "d5fbd8da-de30-43f8-ba35-99ff2758ed32"
+                      quantity: 2
+                      unit_price: 15.00
       responses:
         "200":
           description: Pedido atualizado
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  order:
-                    $ref: "#/components/schemas/Order"
+                allOf:
+                  - $ref: "#/components/schemas/OrgContext"
+                  - type: object
+                    properties:
+                      order:
+                        $ref: "#/components/schemas/Order"
         "400":
           description: Campos obrigatórios ausentes ou action inválido
         "401":
@@ -883,24 +1197,34 @@ paths:
         "404":
           description: Pedido não encontrado
         "422":
-          description: Transição de status inválida ou pedido não permite adicionar itens
+          description: |
+            Transição de status inválida; pedido não permite edição;
+            ou estoque insuficiente para novos itens / aumento de quantidade
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                    example: "Transição inválida: received → cancelled"
-                  allowed:
-                    type: array
-                    items:
-                      type: string
-                    example: []
+                oneOf:
+                  - $ref: "#/components/schemas/StatusTransitionError"
+                  - $ref: "#/components/schemas/StockValidationError"
+              examples:
+                transicao_invalida:
+                  summary: Transição de status inválida
+                  value:
+                    error: "Transição inválida: received → cancelled"
+                    allowed: []
+                estoque_insuficiente:
+                  summary: Estoque insuficiente nos itens editados
+                  value:
+                    error: "Estoque insuficiente para um ou mais produtos"
+                    itens_com_erro:
+                      - product_id: "d5fbd8da-de30-43f8-ba35-99ff2758ed32"
+                        descricao: "Café Especial 250g"
+                        disponivel: 1
+                        solicitado: 5
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
 # WEBHOOKS — eventos enviados pelo Pedii ao agente GCP
-# ──────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
 webhooks:
   order.status_changed:
     post:
@@ -913,43 +1237,43 @@ webhooks:
         - Header `Authorization: Bearer <AGENT_API_KEY>` — mesma chave usada nas chamadas de saída
         - Header `x-internal-secret` — segredo compartilhado entre Supabase e o agente
 
-        **Casos de uso:**
+        **Casos de uso típicos:**
         - `open → accepted`: notificar cliente que o pedido foi aceito
         - `accepted → shipped`: notificar cliente que o pedido saiu para entrega
         - `shipped → received`: confirmar recebimento
         - `* → cancelled`: informar cancelamento ao cliente
 
-        O agente deve usar `customers.whatsapp` para enviar a mensagem no conversacional.
+        Use `customers.whatsapp` + `instance_name` para enviar a mensagem via Evolution API.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                event:
-                  type: string
-                  example: order.status_changed
-                order_id:
-                  type: string
-                  format: uuid
-                old_status:
-                  type: string
-                  enum: [open, accepted, shipped, received, cancelled]
-                new_status:
-                  type: string
-                  enum: [open, accepted, shipped, received, cancelled]
-                organization_id:
-                  type: string
-                  format: uuid
-                order:
-                  $ref: "#/components/schemas/Order"
+              allOf:
+                - $ref: "#/components/schemas/OrgContext"
+                - type: object
+                  properties:
+                    event:
+                      type: string
+                      example: order.status_changed
+                    order_id:
+                      type: string
+                      format: uuid
+                    old_status:
+                      type: string
+                      enum: [open, accepted, shipped, received, cancelled]
+                    new_status:
+                      type: string
+                      enum: [open, accepted, shipped, received, cancelled]
+                    order:
+                      $ref: "#/components/schemas/Order"
             example:
               event: order.status_changed
               order_id: "83781578-c102-4bd3-8f22-9ea6167887aa"
               old_status: open
               new_status: accepted
               organization_id: "f988b66e-21e6-48d5-a90d-08f746600763"
+              instance_name: "pedii_f988b66e"
               order:
                 id: "83781578-c102-4bd3-8f22-9ea6167887aa"
                 status: accepted
@@ -964,7 +1288,7 @@ webhooks:
                 customers:
                   id: "3ed79bc1-c2f1-4c5c-95e4-d9fa1a212b4c"
                   nome: Eloá Mariane da Luz
-                  whatsapp: "(35) 98272-1736"
+                  whatsapp: "35982721736"
                 order_items:
                   - id: "3026e0e8-2f9f-4381-842d-054d01db7a40"
                     quantity: 15
@@ -973,6 +1297,116 @@ webhooks:
                     products:
                       id: "d5fbd8da-de30-43f8-ba35-99ff2758ed32"
                       descricao: Produto Teste Paraguaçu
+      responses:
+        "200":
+          description: Evento processado com sucesso pelo agente
+        "4XX":
+          description: Erro no processamento (Pedii registra mas não retenta)
+
+  order.items_updated:
+    post:
+      summary: Itens do pedido editados pelo atendente
+      description: |
+        Disparado quando o **atendente no dashboard** edita os itens de um pedido `open`
+        antes de aceitá-lo (via `PATCH /orders` com `action: edit_items`).
+
+        Use este evento para comunicar ao cliente final as alterações realizadas em linguagem natural.
+        Exemplos:
+        - "Um produto foi removido do seu pedido por falta de estoque"
+        - "A quantidade do Café Especial foi ajustada de 10 para 3 unidades"
+        - "Adicionamos o Produto Alternativo como substituto"
+
+        Use `order.customers.whatsapp` + `instance_name` para enviar a mensagem.
+        O campo `order.order_items` reflete o estado **final** do pedido após todas as alterações.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/OrgContext"
+                - type: object
+                  properties:
+                    event:
+                      type: string
+                      example: order.items_updated
+                    order_id:
+                      type: string
+                      format: uuid
+                    changes:
+                      type: object
+                      description: Resumo das alterações realizadas nesta chamada
+                      properties:
+                        items_added:
+                          type: array
+                          description: Novos itens inseridos
+                          items:
+                            type: object
+                            properties:
+                              product_id:
+                                type: string
+                                format: uuid
+                              quantity:
+                                type: number
+                              unit_price:
+                                type: number
+                        items_removed:
+                          type: array
+                          description: IDs de order_items removidos
+                          items:
+                            type: string
+                            format: uuid
+                        items_updated:
+                          type: array
+                          description: Itens com quantidade ajustada
+                          items:
+                            type: object
+                            properties:
+                              item_id:
+                                type: string
+                                format: uuid
+                              quantity:
+                                type: number
+                    order:
+                      $ref: "#/components/schemas/Order"
+            example:
+              event: order.items_updated
+              order_id: "83781578-c102-4bd3-8f22-9ea6167887aa"
+              organization_id: "f988b66e-21e6-48d5-a90d-08f746600763"
+              instance_name: "pedii_f988b66e"
+              changes:
+                items_added:
+                  - product_id: "d5fbd8da-de30-43f8-ba35-99ff2758ed32"
+                    quantity: 2
+                    unit_price: 15.00
+                items_removed:
+                  - "3026e0e8-2f9f-4381-842d-054d01db7a40"
+                items_updated:
+                  - item_id: "a1b2c3d4-0000-0000-0000-000000000002"
+                    quantity: 3
+              order:
+                id: "83781578-c102-4bd3-8f22-9ea6167887aa"
+                status: open
+                total: 95.52
+                stores:
+                  apelido: Varginha
+                customers:
+                  id: "3ed79bc1-c2f1-4c5c-95e4-d9fa1a212b4c"
+                  nome: João Silva
+                  whatsapp: "5531999990000"
+                order_items:
+                  - id: "a1b2c3d4-0000-0000-0000-000000000002"
+                    quantity: 3
+                    unit_price: 20.00
+                    subtotal: 60.00
+                    products:
+                      descricao: "Produto Existente"
+                  - id: "new-item-uuid"
+                    quantity: 2
+                    unit_price: 15.00
+                    subtotal: 30.00
+                    products:
+                      descricao: "Produto Alternativo"
       responses:
         "200":
           description: Evento processado com sucesso pelo agente
