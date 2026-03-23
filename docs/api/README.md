@@ -10,10 +10,24 @@ https://qiqwylcjoyztqebqglok.supabase.co/functions/v1
 
 ## Autenticação
 
-Todas as rotas usam `Authorization: Bearer <AGENT_API_KEY>`.
+### Agente → Pedii (chamadas de saída)
 
-A chave é armazenada como secret no Supabase (`AGENT_API_KEY`) e no **GCP Secret Manager**.
-Nunca commitar a chave no repositório.
+Todas as rotas usam:
+```
+Authorization: Bearer <AGENT_API_KEY>
+```
+
+### Pedii → Agente (webhooks recebidos)
+
+Os webhooks enviados pelo Pedii ao endpoint do agente usam:
+```
+x-api-key: <AGENT_API_KEY>
+x-internal-secret: <INTERNAL_WEBHOOK_SECRET>
+```
+
+> A `AGENT_API_KEY` é a mesma chave nos dois sentidos — a diferença é **apenas o header**.
+> A chave é armazenada como secret no Supabase (`AGENT_API_KEY`) e no **GCP Secret Manager**.
+> Nunca commitar a chave no repositório.
 
 ---
 
@@ -433,7 +447,7 @@ O agente deve expor um endpoint para receber esses eventos e disparar mensagens 
 ### Autenticação recebida
 
 ```
-Authorization: Bearer <AGENT_API_KEY>
+x-api-key: <AGENT_API_KEY>
 x-internal-secret: <INTERNAL_WEBHOOK_SECRET>
 ```
 

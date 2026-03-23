@@ -1,17 +1,26 @@
 openapi: 3.1.0
 info:
   title: Pedii Agent API
-  version: 3.1.0
+  version: 3.2.0
   description: |
     APIs utilizadas pelo agente de vendas WhatsApp do Pedii.
-    Todas as rotas requerem autenticação via Bearer token.
 
     ## Autenticação
-    O agente GCP usa uma chave estática (`AGENT_API_KEY`) armazenada no GCP Secret Manager.
-    Passe-a em todas as requisições:
+    Existem dois contextos de autenticação com headers distintos:
+
+    **Agente → Pedii (chamadas de saída):** use `Authorization: Bearer`
     ```
     Authorization: Bearer <AGENT_API_KEY>
     ```
+
+    **Pedii → Agente (webhooks recebidos):** use `x-api-key`
+    ```
+    x-api-key: <AGENT_API_KEY>
+    x-internal-secret: <INTERNAL_WEBHOOK_SECRET>
+    ```
+
+    A `AGENT_API_KEY` é a mesma nos dois sentidos — a diferença é apenas o header usado.
+    Armazenada no GCP Secret Manager e como secret no Supabase. Nunca commitar.
 
     ## Base URL
     ```
@@ -1286,8 +1295,8 @@ webhooks:
         Mudanças feitas pelo próprio agente via API **não** disparam este webhook (evita loop).
 
         **Autenticação recebida:**
-        - Header `Authorization: Bearer <AGENT_API_KEY>` — mesma chave usada nas chamadas de saída
-        - Header `x-internal-secret` — segredo compartilhado entre Supabase e o agente
+        - Header `x-api-key: <AGENT_API_KEY>` — mesma chave usada nas chamadas de saída, header diferente
+        - Header `x-internal-secret: <INTERNAL_WEBHOOK_SECRET>` — segredo compartilhado entre Supabase e o agente
 
         **Casos de uso típicos:**
         - `open → accepted`: notificar cliente que o pedido foi aceito
