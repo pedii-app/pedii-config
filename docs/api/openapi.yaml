@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Pedii Agent API
-  version: 3.2.0
+  version: 3.3.0
   description: |
     APIs utilizadas pelo agente de vendas WhatsApp do Pedii.
 
@@ -430,6 +430,100 @@ components:
           example: "AWAITING_CUSTOMER_APPROVAL"
 
 paths:
+  # ──────────────────────────────────────────────────────────────────────────
+  # RESOLVE ORG — primeira chamada de toda conversa
+  # ──────────────────────────────────────────────────────────────────────────
+  /resolve-org:
+    get:
+      operationId: resolverOrganizacao
+      summary: Resolver organization_id a partir do instance_name da Evolution API
+      description: |
+        **Primeira chamada de toda conversa.**
+
+        Ao receber uma mensagem de um cliente no WhatsApp, o agente só conhece o
+        `instance_name` da instância Evolution. Esta rota converte esse nome no
+        `organization_id` do tenant Pedii correspondente.
+
+        O `organization_id` retornado deve ser armazenado no contexto da conversa
+        e passado em todas as chamadas subsequentes (`/customers`, `/products`,
+        `/calculate-freight`, `/orders`).
+
+        **Rota exclusiva do agente** — não aceita JWT de usuário (retorna 401).
+
+        Se `found: false` (404), a instância não está cadastrada no Pedii e o
+        agente não deve prosseguir com o fluxo de vendas.
+      parameters:
+        - name: instance_name
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Nome exato da instância no Evolution API
+          example: "pedii_f988b66e"
+      responses:
+        "200":
+          description: Instância encontrada — retorna o organization_id do tenant
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  found:
+                    type: boolean
+                    example: true
+                  organization_id:
+                    type: string
+                    format: uuid
+                    description: ID da organização (tenant raiz) a ser usado em todas as chamadas
+                    example: "f988b66e-21e6-48d5-a90d-08f746600763"
+                  instance_name:
+                    type: string
+                    example: "pedii_f988b66e"
+                  phone_number:
+                    type: string
+                    nullable: true
+                    description: Número de telefone conectado à instância (com DDI)
+                    example: "5531999990000"
+                  instance_status:
+                    type: string
+                    nullable: true
+                    enum: [connecting, connected, disconnected, qrcode]
+                    description: Status atual da instância no Evolution API
+                    example: "connected"
+              examples:
+                encontrada:
+                  summary: Instância encontrada
+                  value:
+                    found: true
+                    organization_id: "f988b66e-21e6-48d5-a90d-08f746600763"
+                    instance_name: "pedii_f988b66e"
+                    phone_number: "5531999990000"
+                    instance_status: "connected"
+        "400":
+          description: Parâmetro instance_name ausente
+        "401":
+          description: Token inválido ou ausente (somente AGENT_API_KEY aceita)
+        "404":
+          description: Instância não encontrada no Pedii
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  found:
+                    type: boolean
+                    example: false
+                  organization_id:
+                    type: "null"
+                  instance_name:
+                    type: string
+              example:
+                found: false
+                organization_id: null
+                instance_name: "instancia_desconhecida"
+        "500":
+          description: Erro interno
+
   # ──────────────────────────────────────────────────────────────────────────
   # CUSTOMERS
   # ──────────────────────────────────────────────────────────────────────────

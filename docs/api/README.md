@@ -49,6 +49,10 @@ O agente deve usar o `instance_name` para enviar mensagens via Evolution API.
 ```
 1. Mensagem recebida do cliente via WhatsApp
         ↓
+1a. GET /resolve-org?instance_name=<nome_da_instancia>  ← PRIMEIRA CHAMADA
+    → Resolve organization_id a partir do nome da instância Evolution
+    → O agente usa este organization_id em todas as chamadas subsequentes
+        ↓
 2. GET /customers?store_id=X&whatsapp=55319...
    → found: false?
         ↓
@@ -77,6 +81,40 @@ O agente deve usar o `instance_name` para enviar mensagens via Evolution API.
 ---
 
 ## Endpoints de saída (agente → Pedii)
+
+### `GET /resolve-org` — Resolver organização pelo nome da instância
+
+**Primeira chamada de toda conversa.** O agente só sabe o `instance_name` da Evolution API ao receber uma mensagem — esta rota retorna o `organization_id` correspondente, que deve ser passado em todas as chamadas subsequentes.
+
+> Rota **exclusiva do agente** — não aceita JWT de usuário, apenas `AGENT_API_KEY`.
+
+| Parâmetro | Tipo | Obrigatório | Descrição |
+|---|---|---|---|
+| `instance_name` | string | ✅ | Nome exato da instância no Evolution API |
+
+**Resposta 200 (encontrada):**
+```json
+{
+  "found": true,
+  "organization_id": "f988b66e-21e6-48d5-a90d-08f746600763",
+  "instance_name": "pedii_f988b66e",
+  "phone_number": "5531999990000",
+  "instance_status": "connected"
+}
+```
+
+**Resposta 404 (não encontrada):**
+```json
+{
+  "found": false,
+  "organization_id": null,
+  "instance_name": "nome_que_foi_buscado"
+}
+```
+
+> Se `found: false`, a instância não está cadastrada no Pedii. O agente não deve prosseguir.
+
+---
 
 ### `GET /customers` — Buscar cliente
 
