@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Pedii Agent API
-  version: 3.0.0
+  version: 3.1.0
   description: |
     APIs utilizadas pelo agente de vendas WhatsApp do Pedii.
     Todas as rotas requerem autenticação via Bearer token.
@@ -261,6 +261,13 @@ components:
         status_changed_by_agent:
           type: boolean
           description: True se o último update de status foi feito pelo agente (previne loop de webhook)
+        awaiting_customer_approval:
+          type: boolean
+          default: false
+          description: |
+            True quando o atendente editou os itens do pedido (edit_items) e o agente ainda
+            não registrou confirmação do cliente (customer_approved). Bloqueia a transição
+            open → accepted no dashboard até ser zerado.
         created_by:
           type: string
           format: uuid
@@ -398,6 +405,20 @@ components:
           items:
             type: string
           example: []
+
+    AwaitingCustomerApprovalError:
+      type: object
+      description: |
+        Retornado quando se tenta aceitar um pedido (open → accepted) que está
+        aguardando confirmação do cliente após edição de itens pelo atendente.
+        O agente deve chamar `customer_approved` após o cliente confirmar.
+      properties:
+        error:
+          type: string
+          example: "Este pedido foi modificado e aguarda aprovação do cliente final antes de ser aceito."
+        code:
+          type: string
+          example: "AWAITING_CUSTOMER_APPROVAL"
 
 paths:
   # ──────────────────────────────────────────────────────────────────────────
@@ -1036,7 +1057,7 @@ paths:
       operationId: atualizarPedido
       summary: Atualizar status ou editar itens do pedido
       description: |
-        Três ações disponíveis via campo `action`:
+        Quatro ações disponíveis via campo `action`:
 
         ---
 
@@ -1048,6 +1069,10 @@ paths:
         - `shipped → received | cancelled`
         - `received` e `cancelled` são estados terminais
 
+        ⚠️ A transição `open → accepted` é bloqueada enquanto `awaiting_customer_approval = true`.
+        Retorna 422 com code `AWAITING_CUSTOMER_APPROVAL`. O atendente só pode aceitar após o agente
+        chamar `customer_approved`.
+
         ---
 
         **`add_items`**: Adiciona novos itens a um pedido `open` ou `accepted`.
@@ -1058,13 +1083,24 @@ paths:
         **`edit_items`**: Edição completa de itens (adicionar, remover, ajustar quantidades)
         em uma única chamada atômica. Disponível somente para pedidos `open` ou `accepted`.
 
-        Após a operação, dispara o webhook `order.items_updated` ao agente com o resumo
-        das alterações e o pedido completo atualizado.
+        Após a operação:
+        1. Seta `awaiting_customer_approval = true` no pedido — bloqueia o aceite pelo atendente.
+        2. Dispara o webhook `order.items_updated` ao agente com o resumo das alterações
+           e o pedido completo atualizado.
 
         Casos de uso:
         - Atendente remove item sem estoque antes de aceitar
         - Atendente substitui produto por similar disponível
         - Atendente ajusta quantidade de um item
+
+        ---
+
+        **`customer_approved`**: Registra que o cliente aceitou os ajustes feitos pelo atendente.
+        **Exclusivo do agente** — retorna 403 se chamado com JWT de usuário.
+
+        Zera `awaiting_customer_approval → false`, liberando o atendente para aceitar o pedido.
+        O dashboard atualiza automaticamente via Supabase Realtime.
+        Só funciona em pedidos com `status = open`.
 
       requestBody:
         required: true
@@ -1081,7 +1117,7 @@ paths:
                   description: ID do pedido
                 action:
                   type: string
-                  enum: [update_status, add_items, edit_items]
+                  enum: [update_status, add_items, edit_items, customer_approved]
                   default: update_status
                 # update_status
                 status:
@@ -1178,6 +1214,11 @@ paths:
                     - product_id: "d5fbd8da-de30-43f8-ba35-99ff2758ed32"
                       quantity: 2
                       unit_price: 15.00
+              customer_approved:
+                summary: Cliente aprovou os ajustes feitos pelo atendente
+                value:
+                  id: "83781578-c102-4bd3-8f22-9ea6167887aa"
+                  action: customer_approved
       responses:
         "200":
           description: Pedido atualizado
@@ -1196,16 +1237,22 @@ paths:
           description: Token inválido
         "404":
           description: Pedido não encontrado
+        "403":
+          description: |
+            Acesso negado. Exemplo: JWT de usuário tentou chamar `customer_approved`
+            (ação exclusiva do agente).
         "422":
           description: |
             Transição de status inválida; pedido não permite edição;
-            ou estoque insuficiente para novos itens / aumento de quantidade
+            estoque insuficiente para novos itens / aumento de quantidade;
+            ou pedido aguardando aprovação do cliente (AWAITING_CUSTOMER_APPROVAL).
           content:
             application/json:
               schema:
                 oneOf:
                   - $ref: "#/components/schemas/StatusTransitionError"
                   - $ref: "#/components/schemas/StockValidationError"
+                  - $ref: "#/components/schemas/AwaitingCustomerApprovalError"
               examples:
                 transicao_invalida:
                   summary: Transição de status inválida
@@ -1221,6 +1268,11 @@ paths:
                         descricao: "Café Especial 250g"
                         disponivel: 1
                         solicitado: 5
+                aguardando_cliente:
+                  summary: Pedido bloqueado aguardando aprovação do cliente
+                  value:
+                    error: "Este pedido foi modificado e aguarda aprovação do cliente final antes de ser aceito."
+                    code: "AWAITING_CUSTOMER_APPROVAL"
 
 # ────────────────────────────────────────────────────────────────────────────
 # WEBHOOKS — eventos enviados pelo Pedii ao agente GCP

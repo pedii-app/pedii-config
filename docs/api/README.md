@@ -48,10 +48,16 @@ O agente deve usar o `instance_name` para enviar mensagens via Evolution API.
 6. POST /orders  ← registra o pedido no dashboard do lojista
         ↓
 7a. [Webhook recebido] order.status_changed  ← lojista atualizou status
-        ↓
+    → Agente notifica cliente via WhatsApp (instance_name + customer.whatsapp)
+
 7b. [Webhook recebido] order.items_updated   ← atendente editou itens do pedido
+    → Agente comunica mudanças ao cliente em linguagem natural
+    → Cliente confirma ou recusa na conversa
         ↓
-8. Agente notifica o cliente via WhatsApp usando instance_name + customer.whatsapp
+8.  Cliente confirma ajuste:
+    PATCH /orders { action: "customer_approved" }
+    → awaiting_customer_approval volta a false
+    → Atendente fica livre para aceitar o pedido no dashboard
 ```
 
 ---
@@ -293,7 +299,7 @@ Busca produtos da organização. Pode filtrar por loja específica ou retornar o
 
 ### `PATCH /orders` — Atualizar status ou editar itens
 
-Três ações disponíveis via `action`:
+Quatro ações disponíveis via `action`:
 
 #### `update_status` — Avançar status do pedido
 
@@ -314,6 +320,16 @@ cancelled → (terminal)
 ```json
 { "error": "Transição inválida: received → cancelled", "allowed": [] }
 ```
+
+**Resposta 422** se o pedido aguarda aprovação do cliente:
+```json
+{
+  "error": "Este pedido foi modificado e aguarda aprovação do cliente final antes de ser aceito.",
+  "code": "AWAITING_CUSTOMER_APPROVAL"
+}
+```
+
+> ⚠️ A transição `open → accepted` fica bloqueada enquanto `awaiting_customer_approval = true`. O atendente só consegue aceitar o pedido após o agente chamar `customer_approved`.
 
 ---
 
@@ -337,7 +353,9 @@ Disponível para pedidos com status `open` ou `accepted`.
 
 Permite ao atendente incluir, remover ou ajustar quantidades de itens em pedidos `open` ou `accepted` **numa única chamada**. Disparado geralmente antes de aceitar um pedido onde algum item está sem estoque.
 
-Após a edição, o Pedii envia o webhook `order.items_updated` ao agente para que ele comunique as mudanças ao cliente.
+Após a edição:
+1. O Pedii seta `awaiting_customer_approval = true` no pedido — bloqueando o aceite até o cliente confirmar.
+2. Dispara o webhook `order.items_updated` ao agente para que ele comunique as mudanças ao cliente.
 
 ```json
 {
@@ -366,9 +384,44 @@ Após a edição, o Pedii envia o webhook `order.items_updated` ao agente para q
 {
   "organization_id": "uuid",
   "instance_name": "pedii_f988b66e",
-  "order": { /* pedido completo com itens atualizados */ }
+  "order": {
+    "id": "uuid",
+    "status": "open",
+    "awaiting_customer_approval": true,
+    "order_items": [ /* lista completa e atualizada */ ]
+  }
 }
 ```
+
+---
+
+#### `customer_approved` — Registrar aprovação do cliente
+
+**Exclusivo do agente** (retorna 403 se chamado com JWT de usuário).
+
+Chamado pelo agente após o cliente confirmar os ajustes feitos pelo atendente na conversa do WhatsApp. Zera o flag `awaiting_customer_approval`, liberando o atendente para aceitar o pedido no dashboard.
+
+```json
+{ "id": "uuid-do-pedido", "action": "customer_approved" }
+```
+
+> Só funciona em pedidos com `status = open`. Retorna 422 se o pedido estiver em outro status.
+
+**Resposta 200:**
+```json
+{
+  "organization_id": "uuid",
+  "instance_name": "pedii_f988b66e",
+  "order": {
+    "id": "uuid",
+    "status": "open",
+    "awaiting_customer_approval": false,
+    "order_items": [ /* itens do pedido */ ]
+  }
+}
+```
+
+**Efeito no dashboard:** via Supabase Realtime, o badge "Ag. cliente" some automaticamente da listagem e o botão "Aceitar pedido" é desbloqueado para o atendente.
 
 ---
 
@@ -469,6 +522,22 @@ O agente deve usar este evento para comunicar ao cliente final as alterações r
 
 ---
 
+## Campo `awaiting_customer_approval`
+
+O campo `awaiting_customer_approval` (boolean) está presente em todos os pedidos e controla o fluxo de aprovação quando o atendente edita itens antes do aceite.
+
+| Valor | Significado |
+|---|---|
+| `false` (padrão) | Pedido normal — atendente pode aceitar livremente |
+| `true` | Pedido editado pelo atendente — bloqueado aguardando confirmação do cliente |
+
+**Ciclo de vida do flag:**
+1. **`edit_items`** → seta `true` automaticamente + dispara webhook `order.items_updated`
+2. **Cliente confirma** na conversa → agente chama `customer_approved` → flag volta a `false`
+3. **Dashboard** atualiza em tempo real via Realtime: badge "Ag. cliente" some, botão "Aceitar" é liberado
+
+---
+
 ## Comportamento de estoque (automático)
 
 Todos os updates de estoque são gerenciados automaticamente por triggers no banco:
@@ -492,7 +561,7 @@ A validação de estoque é aplicada no INSERT (trigger `BEFORE INSERT`) e na AP
 | `401` | Token ausente ou inválido |
 | `403` | Acesso negado (ex: loja de outra organização) |
 | `404` | Recurso não encontrado |
-| `422` | Transição de status inválida; estoque insuficiente; endereço insuficiente para geocodificar |
+| `422` | Transição de status inválida; estoque insuficiente; endereço insuficiente para geocodificar; pedido aguardando aprovação do cliente (`AWAITING_CUSTOMER_APPROVAL`) |
 | `500` | Erro interno |
 
 ---
