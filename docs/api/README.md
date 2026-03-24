@@ -48,35 +48,47 @@ O agente deve usar o `instance_name` para enviar mensagens via Evolution API.
 
 ```
 1. Mensagem recebida do cliente via WhatsApp
+   (Evolution fornece: instance_name + whatsapp do cliente)
         ↓
-1a. GET /resolve-org?instance_name=<nome_da_instancia>  ← PRIMEIRA CHAMADA
-    → Resolve organization_id a partir do nome da instância Evolution
-    → O agente usa este organization_id em todas as chamadas subsequentes
+2. GET /resolve-org?instance_name=<nome_da_instancia>
+   → Resolve organization_id a partir do nome da instância Evolution
+   → Usado em todas as chamadas subsequentes
         ↓
-1b. GET /nearest-stores?cep=<CEP_do_cliente>&organization_id=X  ← SEGUNDA CHAMADA
-    → Geocodifica o CEP e retorna as 3 lojas mais próximas
-    → O agente usa o store_id da loja escolhida nas chamadas seguintes
+3. GET /customers?organization_id=X&whatsapp=<numero_do_cliente>
+   → O agente já sabe o whatsapp — consulta imediatamente sem pedir nada ao cliente
+
+   ┌─────────────────────────────────────────────┐
+   │ CLIENTE ENCONTRADO                          │
+   │ → Confirma com o cliente se o endereço      │
+   │   cadastrado ainda está correto             │
+   │ → Se mudou: POST /customers (atualiza CEP)  │
+   │ → CEP disponível: usa o cadastrado          │
+   └─────────────────────────────────────────────┘
+   ┌─────────────────────────────────────────────┐
+   │ CLIENTE NÃO ENCONTRADO                      │
+   │ → Pede nome e CEP ao cliente                │
+   │ → POST /customers  ← cria o cadastro        │
+   └─────────────────────────────────────────────┘
+        ↓ (em ambos os casos, CEP está disponível)
+4. GET /nearest-stores?organization_id=X&cep=<CEP_do_cliente>
+   → Retorna até 3 lojas dentro do raio de entrega, ordenadas por distância
+   → O agente usa o store_id da loja escolhida nas chamadas seguintes
         ↓
-2. GET /customers?organization_id=X&whatsapp=55319...
-   → found: false?
-        ↓
-3. POST /customers  ← cria o cliente
-        ↓
-4. GET /products?organization_id=X&in_stock=true  ← catálogo de toda a org
+5. GET /products?organization_id=X&in_stock=true  ← catálogo da org
    (ou GET /products?store_id=X&in_stock=true  ← catálogo de uma loja específica)
         ↓
-5. POST /calculate-freight  ← verifica raio + valor do frete
+6. POST /calculate-freight  ← confirma raio e calcula valor do frete
         ↓
-6. POST /orders  ← registra o pedido no dashboard do lojista
+7. POST /orders  ← registra o pedido no dashboard do lojista
         ↓
-7a. [Webhook recebido] order.status_changed  ← lojista atualizou status
+8a. [Webhook recebido] order.status_changed  ← lojista atualizou status
     → Agente notifica cliente via WhatsApp (instance_name + customer.whatsapp)
 
-7b. [Webhook recebido] order.items_updated   ← atendente editou itens do pedido
+8b. [Webhook recebido] order.items_updated   ← atendente editou itens do pedido
     → Agente comunica mudanças ao cliente em linguagem natural
     → Cliente confirma ou recusa na conversa
         ↓
-8.  Cliente confirma ajuste:
+9.  Cliente confirma ajuste:
     PATCH /orders { action: "customer_approved" }
     → awaiting_customer_approval volta a false
     → Atendente fica livre para aceitar o pedido no dashboard
