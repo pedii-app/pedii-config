@@ -66,29 +66,33 @@ O agente deve usar o `instance_name` para enviar mensagens via Evolution API.
    └─────────────────────────────────────────────┘
    ┌─────────────────────────────────────────────┐
    │ CLIENTE NÃO ENCONTRADO                      │
-   │ → Pede nome e CEP ao cliente                │
-   │ → POST /customers  ← cria o cadastro        │
+   │ → Pede apenas o CEP ao cliente              │
+   │ → Cadastro adiado — sem fricção no início   │
    └─────────────────────────────────────────────┘
         ↓ (em ambos os casos, CEP está disponível)
 4. GET /nearest-stores?organization_id=X&cep=<CEP_do_cliente>
    → Retorna até 3 lojas dentro do raio de entrega, ordenadas por distância
-   → O agente usa o store_id da loja escolhida nas chamadas seguintes
+   → Agente apresenta as opções e cliente escolhe a loja desejada
         ↓
-5. GET /products?organization_id=X&in_stock=true  ← catálogo da org
-   (ou GET /products?store_id=X&in_stock=true  ← catálogo de uma loja específica)
+5. GET /products?store_id=<loja_escolhida>&in_stock=true
+   → Catálogo da loja escolhida; cliente monta o carrinho
         ↓
 6. POST /calculate-freight  ← confirma raio e calcula valor do frete
         ↓
-7. POST /orders  ← registra o pedido no dashboard do lojista
+7. [Somente se cliente NÃO estava cadastrado]
+   → Agente pede nome e endereço completo para finalizar
+   → POST /customers  ← cria o cadastro antes de registrar o pedido
         ↓
-8a. [Webhook recebido] order.status_changed  ← lojista atualizou status
+8. POST /orders  ← registra o pedido no dashboard do lojista
+        ↓
+9a. [Webhook recebido] order.status_changed  ← lojista atualizou status
     → Agente notifica cliente via WhatsApp (instance_name + customer.whatsapp)
 
-8b. [Webhook recebido] order.items_updated   ← atendente editou itens do pedido
+9b. [Webhook recebido] order.items_updated   ← atendente editou itens do pedido
     → Agente comunica mudanças ao cliente em linguagem natural
     → Cliente confirma ou recusa na conversa
         ↓
-9.  Cliente confirma ajuste:
+10. Cliente confirma ajuste:
     PATCH /orders { action: "customer_approved" }
     → awaiting_customer_approval volta a false
     → Atendente fica livre para aceitar o pedido no dashboard
