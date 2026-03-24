@@ -177,13 +177,16 @@ O agente deve usar o `instance_name` para enviar mensagens via Evolution API.
 
 | Campo | Descrição |
 |---|---|
-| `nearest_stores` | Até 3 lojas mais próximas, ordenadas por `distancia_km` crescente |
-| `dentro_raio` | `true` se `distancia_km ≤ raio_entrega_km`. `null` se a loja não tem raio configurado |
+| `nearest_stores` | Até 3 lojas **dentro do raio de atendimento**, ordenadas por `distancia_km` crescente |
+| `dentro_raio` | `true` se `distancia_km ≤ raio_entrega_km`. `null` se a loja não tem raio configurado (incluída sem filtro) |
 | `lojas_sem_coordenadas` | Lojas que não puderam ser geocodificadas e foram excluídas do ranking |
+| `message` | Presente apenas quando `nearest_stores` está vazio — explica que o cliente está fora do raio de todas as lojas |
+
+> **Regra de filtragem:** somente lojas onde o cliente está **dentro** do raio de atendimento são retornadas. Lojas sem `raio_entrega_km` configurado (`null`) são incluídas sem restrição de distância. Se nenhuma loja atender o CEP, `nearest_stores` retorna vazio com um campo `message` — **o agente deve informar ao cliente que não há cobertura de entrega no endereço dele**.
 
 **Erros:**
 - `400` — `cep` ou `organization_id` ausentes; CEP com formato inválido
-- `404` — nenhuma loja encontrada para a org
+- `404` — nenhuma loja cadastrada para a org
 - `422` — CEP não pôde ser geocodificado (CEP inexistente ou inválido)
 
 > O geocoding das lojas é lazy: se uma loja ainda não tem `lat/lng`, é geocodificada nesta chamada e as coordenadas são persistidas para uso futuro.

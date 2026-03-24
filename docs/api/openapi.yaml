@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Pedii Agent API
-  version: 3.4.0
+  version: 3.4.1
   description: |
     APIs utilizadas pelo agente de vendas WhatsApp do Pedii.
 
@@ -651,9 +651,17 @@ paths:
                     description: Lojas excluídas do ranking por não terem sido geocodificadas
                   nearest_stores:
                     type: array
-                    description: Até 3 lojas mais próximas, ordenadas por distancia_km crescente
+                    description: |
+                      Até 3 lojas dentro do raio de atendimento, ordenadas por distancia_km crescente.
+                      Vazio se o CEP estiver fora do raio de todas as lojas.
                     items:
                       $ref: "#/components/schemas/NearestStore"
+                  message:
+                    type: string
+                    description: |
+                      Presente apenas quando nearest_stores está vazio. Indica que o cliente
+                      está fora do raio de entrega de todas as lojas da organização.
+                    example: "Nenhuma loja atende o CEP informado. O cliente está fora do raio de entrega de todas as lojas."
               example:
                 organization_id: "f988b66e-21e6-48d5-a90d-08f746600763"
                 cep: "37062683"
