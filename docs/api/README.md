@@ -53,6 +53,10 @@ O agente deve usar o `instance_name` para enviar mensagens via Evolution API.
     → Resolve organization_id a partir do nome da instância Evolution
     → O agente usa este organization_id em todas as chamadas subsequentes
         ↓
+1b. GET /nearest-stores?cep=<CEP_do_cliente>&organization_id=X  ← SEGUNDA CHAMADA
+    → Geocodifica o CEP e retorna as 3 lojas mais próximas
+    → O agente usa o store_id da loja escolhida nas chamadas seguintes
+        ↓
 2. GET /customers?store_id=X&whatsapp=55319...
    → found: false?
         ↓
@@ -113,6 +117,76 @@ O agente deve usar o `instance_name` para enviar mensagens via Evolution API.
 ```
 
 > Se `found: false`, a instância não está cadastrada no Pedii. O agente não deve prosseguir.
+
+---
+
+### `GET /nearest-stores` — Lojas mais próximas do cliente
+
+**Segunda chamada da jornada.** O agente recebe o CEP do cliente e descobre qual(is) loja(s) da organização podem atendê-lo, já calculando a distância e se o cliente está dentro do raio de entrega.
+
+> Rota **exclusiva do agente** — somente `AGENT_API_KEY`. Aceita `GET` (query string) ou `POST` (body JSON).
+
+| Parâmetro | Tipo | Obrigatório | Descrição |
+|---|---|---|---|
+| `cep` | string | ✅ | CEP do cliente (8 dígitos, com ou sem hífen) |
+| `organization_id` | uuid | ✅ | ID da organização (obtido via `/resolve-org`) |
+
+**Resposta 200:**
+```json
+{
+  "organization_id": "f988b66e-21e6-48d5-a90d-08f746600763",
+  "cep": "37062683",
+  "cliente_coords": { "lat": -21.5512, "lng": -45.4333 },
+  "total_lojas": 3,
+  "lojas_sem_coordenadas": 0,
+  "nearest_stores": [
+    {
+      "id": "4d22e5f2-8138-4a67-9446-88d46ed4ee0c",
+      "nome": "Varginha",
+      "razao_social": "TM Farma - Varginha",
+      "apelido": "Varginha",
+      "endereco": {
+        "logradouro": "Rua Wenceslau Braz",
+        "numero": "100",
+        "bairro": "Centro",
+        "cidade": "Varginha",
+        "estado": "MG",
+        "cep": "37002000"
+      },
+      "lat": -21.5510,
+      "lng": -45.4300,
+      "raio_entrega_km": 5.0,
+      "distancia_km": 0.42,
+      "dentro_raio": true
+    },
+    {
+      "id": "ee4d2a74-25fd-4432-91a8-96121c6bf64e",
+      "nome": "Paraguaçu",
+      "razao_social": "TM Farma - Paraguaçu",
+      "apelido": "Paraguaçu",
+      "endereco": { "cidade": "Paraguaçu", "estado": "MG", "cep": "37280000" },
+      "lat": -21.5400,
+      "lng": -45.7200,
+      "raio_entrega_km": 10.0,
+      "distancia_km": 28.15,
+      "dentro_raio": false
+    }
+  ]
+}
+```
+
+| Campo | Descrição |
+|---|---|
+| `nearest_stores` | Até 3 lojas mais próximas, ordenadas por `distancia_km` crescente |
+| `dentro_raio` | `true` se `distancia_km ≤ raio_entrega_km`. `null` se a loja não tem raio configurado |
+| `lojas_sem_coordenadas` | Lojas que não puderam ser geocodificadas e foram excluídas do ranking |
+
+**Erros:**
+- `400` — `cep` ou `organization_id` ausentes; CEP com formato inválido
+- `404` — nenhuma loja encontrada para a org
+- `422` — CEP não pôde ser geocodificado (CEP inexistente ou inválido)
+
+> O geocoding das lojas é lazy: se uma loja ainda não tem `lat/lng`, é geocodificada nesta chamada e as coordenadas são persistidas para uso futuro.
 
 ---
 

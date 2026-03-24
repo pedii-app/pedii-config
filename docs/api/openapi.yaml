@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Pedii Agent API
-  version: 3.3.0
+  version: 3.4.0
   description: |
     APIs utilizadas pelo agente de vendas WhatsApp do Pedii.
 
@@ -403,6 +403,67 @@ components:
                 type: number
                 example: 10
 
+    NearestStore:
+      type: object
+      description: Loja com distância calculada em relação ao CEP do cliente
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: ID da loja no Pedii (usar como store_id nas chamadas seguintes)
+        nome:
+          type: string
+          description: Apelido da loja ou razão social se apelido não configurado
+          example: Varginha
+        razao_social:
+          type: string
+          example: TM Farma - Varginha
+        apelido:
+          type: string
+          nullable: true
+          example: Varginha
+        endereco:
+          type: object
+          properties:
+            logradouro:
+              type: string
+              nullable: true
+            numero:
+              type: string
+              nullable: true
+            bairro:
+              type: string
+              nullable: true
+            cidade:
+              type: string
+            estado:
+              type: string
+            cep:
+              type: string
+              nullable: true
+        lat:
+          type: number
+          format: double
+        lng:
+          type: number
+          format: double
+        raio_entrega_km:
+          type: number
+          nullable: true
+          description: Raio máximo de entrega configurado na loja. Null se não configurado.
+          example: 5.0
+        distancia_km:
+          type: number
+          format: double
+          description: Distância em km entre o CEP do cliente e a loja (Haversine)
+          example: 0.42
+        dentro_raio:
+          type: boolean
+          nullable: true
+          description: |
+            True se distancia_km ≤ raio_entrega_km.
+            Null se a loja não tem raio_entrega_km configurado.
+
     StatusTransitionError:
       type: object
       properties:
@@ -525,6 +586,191 @@ paths:
           description: Erro interno
 
   # ──────────────────────────────────────────────────────────────────────────
+  # ──────────────────────────────────────────────────────────────────────────
+  # NEAREST STORES
+  # ──────────────────────────────────────────────────────────────────────────
+  /nearest-stores:
+    get:
+      operationId: lojasProximas
+      summary: Lojas mais próximas de um CEP
+      description: |
+        Geocodifica o CEP do cliente e retorna as 3 lojas da organização com menor distância,
+        ordenadas por `distancia_km` crescente. Indica se o cliente está dentro do raio de entrega
+        de cada loja.
+
+        **Geocoding lazy:** se uma loja ainda não tem `lat/lng` cadastrada, é geocodificada nesta
+        chamada e as coordenadas são persistidas para uso futuro, acelerando chamadas seguintes.
+
+        **Rota exclusiva do agente** — aceita somente `AGENT_API_KEY` (sem JWT de usuário).
+        Aceita `GET` (query string) ou `POST` (body JSON).
+      parameters:
+        - name: cep
+          in: query
+          required: true
+          schema:
+            type: string
+          description: "CEP do cliente (8 dígitos, com ou sem hífen). Ex: 37062683"
+        - name: organization_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: ID da organização (obtido via GET /resolve-org)
+      responses:
+        "200":
+          description: Lista das 3 lojas mais próximas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  organization_id:
+                    type: string
+                    format: uuid
+                  cep:
+                    type: string
+                    example: "37062683"
+                  cliente_coords:
+                    type: object
+                    description: Coordenadas obtidas via geocodificação do CEP
+                    properties:
+                      lat:
+                        type: number
+                        format: double
+                        example: -21.5512
+                      lng:
+                        type: number
+                        format: double
+                        example: -45.4333
+                  total_lojas:
+                    type: integer
+                    description: Total de lojas da organização
+                  lojas_sem_coordenadas:
+                    type: integer
+                    description: Lojas excluídas do ranking por não terem sido geocodificadas
+                  nearest_stores:
+                    type: array
+                    description: Até 3 lojas mais próximas, ordenadas por distancia_km crescente
+                    items:
+                      $ref: "#/components/schemas/NearestStore"
+              example:
+                organization_id: "f988b66e-21e6-48d5-a90d-08f746600763"
+                cep: "37062683"
+                cliente_coords:
+                  lat: -21.5512
+                  lng: -45.4333
+                total_lojas: 3
+                lojas_sem_coordenadas: 0
+                nearest_stores:
+                  - id: "4d22e5f2-8138-4a67-9446-88d46ed4ee0c"
+                    nome: Varginha
+                    razao_social: TM Farma - Varginha
+                    apelido: Varginha
+                    endereco:
+                      logradouro: Rua Wenceslau Braz
+                      numero: "100"
+                      bairro: Centro
+                      cidade: Varginha
+                      estado: MG
+                      cep: "37002000"
+                    lat: -21.5510
+                    lng: -45.4300
+                    raio_entrega_km: 5.0
+                    distancia_km: 0.42
+                    dentro_raio: true
+                  - id: "ee4d2a74-25fd-4432-91a8-96121c6bf64e"
+                    nome: Paraguaçu
+                    razao_social: TM Farma - Paraguaçu
+                    apelido: Paraguaçu
+                    endereco:
+                      logradouro: null
+                      numero: null
+                      bairro: null
+                      cidade: Paraguaçu
+                      estado: MG
+                      cep: "37280000"
+                    lat: -21.5400
+                    lng: -45.7200
+                    raio_entrega_km: 10.0
+                    distancia_km: 28.15
+                    dentro_raio: false
+        "400":
+          description: |
+            Parâmetros ausentes ou CEP inválido (menos de 8 dígitos após normalização)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                parametros_ausentes:
+                  summary: Parâmetros obrigatórios ausentes
+                  value:
+                    error: "Parâmetros obrigatórios: cep, organization_id"
+                cep_invalido:
+                  summary: CEP com formato inválido
+                  value:
+                    error: "CEP inválido. Informe 8 dígitos."
+        "401":
+          description: Token inválido ou ausente
+        "404":
+          description: Nenhuma loja encontrada para a organização
+        "422":
+          description: CEP não pôde ser geocodificado (inexistente ou inválido)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "Não foi possível geocodificar o CEP informado. Verifique se o CEP é válido."
+                cep: "00000000"
+
+    post:
+      operationId: lojasProximasPost
+      summary: Lojas mais próximas de um CEP (via body)
+      description: |
+        Versão POST de `/nearest-stores`. Mesma lógica — útil quando o CEP contém caracteres
+        especiais que dificultam a query string.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - cep
+                - organization_id
+              properties:
+                cep:
+                  type: string
+                  example: "37062-683"
+                organization_id:
+                  type: string
+                  format: uuid
+            example:
+              cep: "37062-683"
+              organization_id: "f988b66e-21e6-48d5-a90d-08f746600763"
+      responses:
+        "200":
+          description: Lista das 3 lojas mais próximas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  nearest_stores:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/NearestStore"
+        "400":
+          description: Parâmetros ausentes ou CEP inválido
+        "401":
+          description: Token inválido
+        "404":
+          description: Nenhuma loja encontrada
+        "422":
+          description: CEP não geocodificável
+
   # CUSTOMERS
   # ──────────────────────────────────────────────────────────────────────────
   /customers:
