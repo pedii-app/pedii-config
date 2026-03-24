@@ -57,7 +57,7 @@ O agente deve usar o `instance_name` para enviar mensagens via Evolution API.
     → Geocodifica o CEP e retorna as 3 lojas mais próximas
     → O agente usa o store_id da loja escolhida nas chamadas seguintes
         ↓
-2. GET /customers?store_id=X&whatsapp=55319...
+2. GET /customers?organization_id=X&whatsapp=55319...
    → found: false?
         ↓
 3. POST /customers  ← cria o cliente
@@ -208,11 +208,13 @@ O agente deve usar o `instance_name` para enviar mensagens via Evolution API.
 
 | Parâmetro | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
-| `store_id` | uuid | ✅ | ID da loja do agente |
+| `organization_id` | uuid | ✅ | ID da organização (obtido via `/resolve-org`) |
+| `store_id` | uuid | — | Alternativa ao `organization_id` (retrocompatibilidade) |
 | `whatsapp` | string | ⚠️ | Número com DDI (ex: `5531999990000`) |
 | `id` | uuid | ⚠️ | UUID do cliente |
 
 > ⚠️ Informe `whatsapp` **ou** `id`.
+> O cliente pertence à **organização**, não à loja — use sempre `organization_id` diretamente. `store_id` é aceito como fallback: quando informado, a função resolve o `organization_id` internamente.
 
 **Resposta 200:**
 ```json
@@ -241,12 +243,12 @@ Se não encontrado: `{ "found": false, "customer": null }`
 
 ### `POST /customers` — Criar ou atualizar cliente
 
-Upsert por `whatsapp` + organização. Use para novos clientes ou atualização de endereço.
+Upsert por `whatsapp` + `organization_id`. Use para novos clientes ou atualização de endereço.
 
 **Body:**
 ```json
 {
-  "store_id": "uuid-da-loja",
+  "organization_id": "f988b66e-21e6-48d5-a90d-08f746600763",
   "nome": "João Silva",
   "whatsapp": "5531999990000",
   "logradouro": "Avenida do Contorno",
@@ -257,6 +259,8 @@ Upsert por `whatsapp` + organização. Use para novos clientes ou atualização 
   "cep": "37062683"
 }
 ```
+
+> `store_id` ainda é aceito no lugar de `organization_id` (retrocompatibilidade), mas `organization_id` é o campo canônico. Ao menos um dos dois deve ser informado.
 
 **Resposta 201:** `{ "customer": { ...dados } }`
 

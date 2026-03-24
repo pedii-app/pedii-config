@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Pedii Agent API
-  version: 3.4.2
+  version: 3.5.0
   description: |
     APIs utilizadas pelo agente de vendas WhatsApp do Pedii.
 
@@ -806,16 +806,30 @@ paths:
       operationId: buscarCliente
       summary: Buscar cliente pelo número de WhatsApp ou ID
       description: |
-        Procura um cliente na organização vinculada à `store_id`.
-        Ideal para verificar se o cliente já está cadastrado antes de iniciar uma conversa.
+        Procura um cliente na organização. O cliente pertence à **organização**, não à loja,
+        portanto use `organization_id` diretamente (obtido via `GET /resolve-org`).
+
+        `store_id` é aceito como alternativa retrocompatível: quando informado, a função
+        resolve o `organization_id` internamente via lookup na tabela `stores`.
       parameters:
-        - name: store_id
+        - name: organization_id
           in: query
-          required: true
+          required: false
           schema:
             type: string
             format: uuid
-          description: ID da loja atendida pelo agente
+          description: |
+            ID da organização (obtido via /resolve-org). **Campo canônico — preferir ao store_id.**
+            Obrigatório se store_id não for informado.
+        - name: store_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+          description: |
+            Alternativa retrocompatível ao organization_id. Quando informado, o organization_id
+            é resolvido internamente. Obrigatório se organization_id não for informado.
         - name: whatsapp
           in: query
           schema:
@@ -843,7 +857,7 @@ paths:
                       - type: "null"
               examples:
                 encontrado:
-                  summary: Cliente encontrado
+                  summary: Cliente encontrado (usando organization_id)
                   value:
                     found: true
                     customer:
@@ -858,18 +872,21 @@ paths:
                     found: false
                     customer: null
         "400":
-          description: Parâmetros inválidos (store_id ausente ou nenhum filtro informado)
+          description: "Parâmetros inválidos: organization_id e store_id ausentes, ou nenhum filtro (whatsapp/id) informado"
         "401":
           description: Token inválido ou ausente
         "404":
-          description: Loja não encontrada
+          description: "Loja não encontrada (apenas quando store_id for usado no lugar de organization_id)"
 
     post:
       operationId: criarOuAtualizarCliente
       summary: Criar ou atualizar cliente
       description: |
-        Cria um novo cliente ou atualiza os dados de um existente (upsert por `whatsapp` + organização).
+        Cria um novo cliente ou atualiza os dados de um existente (upsert por `whatsapp` + `organization_id`).
         O geocoding de lat/lng acontece automaticamente via trigger.
+
+        Use `organization_id` diretamente (campo canônico). `store_id` é aceito como alternativa
+        retrocompatível — ao menos um dos dois deve ser informado.
       requestBody:
         required: true
         content:
@@ -877,13 +894,21 @@ paths:
             schema:
               type: object
               required:
-                - store_id
                 - nome
                 - whatsapp
               properties:
+                organization_id:
+                  type: string
+                  format: uuid
+                  description: |
+                    ID da organização (obtido via /resolve-org). Campo canônico.
+                    Obrigatório se store_id não for informado.
+                  example: "f988b66e-21e6-48d5-a90d-08f746600763"
                 store_id:
                   type: string
                   format: uuid
+                  description: |
+                    Alternativa retrocompatível. Obrigatório se organization_id não for informado.
                 nome:
                   type: string
                   example: João Silva
