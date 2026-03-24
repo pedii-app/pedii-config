@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Pedii Agent API
-  version: 3.5.0
+  version: 3.6.0
   description: |
     APIs utilizadas pelo agente de vendas WhatsApp do Pedii.
 
@@ -463,6 +463,31 @@ components:
           description: |
             True se distancia_km ≤ raio_entrega_km.
             Null se a loja não tem raio_entrega_km configurado.
+        is_currently_open:
+          type: boolean
+          description: |
+            True se a loja está aberta no momento da consulta (horário BRT UTC-3).
+            Considera fechamento temporário e grade horária configurada.
+          example: true
+        store_status:
+          type: string
+          enum:
+            - open
+            - closed_temporary
+            - closed_schedule
+            - no_hours_configured
+          description: |
+            Status de funcionamento atual da loja:
+            - `open`: loja aberta no momento
+            - `closed_schedule`: fora do horário ou dia marcado como fechado
+            - `closed_temporary`: fechamento de emergência ativo (independente do horário)
+            - `no_hours_configured`: nenhuma grade horária cadastrada — tratada como aberta
+          example: open
+        temporarily_closed_reason:
+          type: string
+          nullable: true
+          description: Motivo do fechamento temporário informado pelo lojista. Null se não há fechamento ativo ou se nenhum motivo foi informado.
+          example: null
 
     StatusTransitionError:
       type: object
@@ -1442,18 +1467,82 @@ paths:
         "404":
           description: Loja ou cliente não encontrado
         "422":
-          description: Estoque insuficiente para um ou mais itens
+          description: |
+            Erros de validação. Possíveis `code`:
+            - **sem código** — estoque insuficiente
+            - `STORE_TEMPORARILY_CLOSED` — loja em fechamento de emergência
+            - `STORE_CLOSED_TODAY` — loja sem atendimento no dia atual
+            - `STORE_OUTSIDE_HOURS` — pedido fora do horário de funcionamento configurado
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/StockValidationError"
-              example:
-                error: "Estoque insuficiente para um ou mais produtos"
-                itens_com_erro:
-                  - product_id: "d5fbd8da-de30-43f8-ba35-99ff2758ed32"
-                    descricao: "Café Especial 250g"
-                    disponivel: 3
-                    solicitado: 10
+                oneOf:
+                  - $ref: "#/components/schemas/StockValidationError"
+                  - type: object
+                    description: Loja fechada temporariamente
+                    properties:
+                      error:
+                        type: string
+                        example: "A loja está temporariamente fechada e não está aceitando pedidos."
+                      code:
+                        type: string
+                        example: STORE_TEMPORARILY_CLOSED
+                      reason:
+                        type: string
+                        nullable: true
+                        example: "Falta de energia"
+                  - type: object
+                    description: Loja sem atendimento hoje
+                    properties:
+                      error:
+                        type: string
+                        example: "A loja não tem atendimento hoje."
+                      code:
+                        type: string
+                        example: STORE_CLOSED_TODAY
+                  - type: object
+                    description: Pedido fora do horário de funcionamento
+                    properties:
+                      error:
+                        type: string
+                        example: "A loja está fora do horário de atendimento. Atendimento entre 08:00 e 18:00."
+                      code:
+                        type: string
+                        example: STORE_OUTSIDE_HOURS
+                      open_time:
+                        type: string
+                        example: "08:00"
+                      close_time:
+                        type: string
+                        example: "18:00"
+              examples:
+                estoque_insuficiente:
+                  summary: Estoque insuficiente
+                  value:
+                    error: "Estoque insuficiente para um ou mais produtos"
+                    itens_com_erro:
+                      - product_id: "d5fbd8da-de30-43f8-ba35-99ff2758ed32"
+                        descricao: "Café Especial 250g"
+                        disponivel: 3
+                        solicitado: 10
+                loja_fechada_temporariamente:
+                  summary: Fechamento temporário ativo
+                  value:
+                    error: "A loja está temporariamente fechada e não está aceitando pedidos."
+                    code: STORE_TEMPORARILY_CLOSED
+                    reason: "Falta de energia"
+                loja_fechada_hoje:
+                  summary: Loja sem atendimento hoje
+                  value:
+                    error: "A loja não tem atendimento hoje."
+                    code: STORE_CLOSED_TODAY
+                fora_do_horario:
+                  summary: Fora do horário de funcionamento
+                  value:
+                    error: "A loja está fora do horário de atendimento. Atendimento entre 08:00 e 18:00."
+                    code: STORE_OUTSIDE_HOURS
+                    open_time: "08:00"
+                    close_time: "18:00"
 
     patch:
       operationId: atualizarPedido

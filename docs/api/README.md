@@ -183,7 +183,10 @@ O agente deve usar o `instance_name` para enviar mensagens via Evolution API.
       "lng": -45.4300,
       "raio_entrega_km": 5.0,
       "distancia_km": 0.42,
-      "dentro_raio": true
+      "dentro_raio": true,
+      "is_currently_open": true,
+      "store_status": "open",
+      "temporarily_closed_reason": null
     },
     {
       "id": "ee4d2a74-25fd-4432-91a8-96121c6bf64e",
@@ -195,7 +198,10 @@ O agente deve usar o `instance_name` para enviar mensagens via Evolution API.
       "lng": -45.7200,
       "raio_entrega_km": 10.0,
       "distancia_km": 28.15,
-      "dentro_raio": false
+      "dentro_raio": false,
+      "is_currently_open": false,
+      "store_status": "closed_schedule",
+      "temporarily_closed_reason": null
     }
   ]
 }
@@ -205,8 +211,22 @@ O agente deve usar o `instance_name` para enviar mensagens via Evolution API.
 |---|---|
 | `nearest_stores` | Até 3 lojas **dentro do raio de atendimento**, ordenadas por `distancia_km` crescente |
 | `dentro_raio` | `true` se `distancia_km ≤ raio_entrega_km`. `null` se a loja não tem raio configurado (incluída sem filtro) |
+| `is_currently_open` | `true` se a loja está aberta **agora** (horário BRT), considerando fechamento temporário e grade horária |
+| `store_status` | `"open"` \| `"closed_temporary"` \| `"closed_schedule"` \| `"no_hours_configured"` |
+| `temporarily_closed_reason` | Motivo do fechamento temporário informado pelo lojista. `null` se não há fechamento ativo ou sem motivo |
 | `lojas_sem_coordenadas` | Lojas que não puderam ser geocodificadas e foram excluídas do ranking |
 | `message` | Presente apenas quando `nearest_stores` está vazio — explica que o cliente está fora do raio de todas as lojas |
+
+**Valores de `store_status`:**
+
+| Valor | Significado |
+|---|---|
+| `open` | Loja aberta no momento |
+| `closed_schedule` | Fora do horário configurado para hoje, ou o dia está marcado como fechado |
+| `closed_temporary` | Fechamento de emergência ativo (independente do horário) |
+| `no_hours_configured` | Nenhum horário cadastrado — tratada como aberta |
+
+> O agente deve informar ao cliente se a loja está fechada (`is_currently_open: false`) antes de prosseguir com o pedido, sugerindo tentar novamente no horário de funcionamento.
 
 > **Regra de filtragem:** somente lojas onde o cliente está **dentro** do raio de atendimento são retornadas. Lojas sem `raio_entrega_km` configurado (`null`) são incluídas sem restrição de distância. Se nenhuma loja atender o CEP, `nearest_stores` retorna vazio com um campo `message` — **o agente deve informar ao cliente que não há cobertura de entrega no endereço dele**.
 
@@ -392,6 +412,33 @@ Busca produtos da organização. Pode filtrar por loja específica ou retornar o
     "stores": { "id": "uuid", "apelido": "Varginha" },
     "order_items": [ ... ]
   }
+}
+```
+
+**Resposta 422 — loja fechada temporariamente:**
+```json
+{
+  "error": "A loja está temporariamente fechada e não está aceitando pedidos.",
+  "code": "STORE_TEMPORARILY_CLOSED",
+  "reason": "Falta de energia"
+}
+```
+
+**Resposta 422 — loja fechada hoje (sem horário de funcionamento):**
+```json
+{
+  "error": "A loja não tem atendimento hoje.",
+  "code": "STORE_CLOSED_TODAY"
+}
+```
+
+**Resposta 422 — fora do horário de funcionamento:**
+```json
+{
+  "error": "A loja está fora do horário de atendimento. Atendimento entre 08:00 e 18:00.",
+  "code": "STORE_OUTSIDE_HOURS",
+  "open_time": "08:00",
+  "close_time": "18:00"
 }
 ```
 
@@ -721,7 +768,7 @@ A validação de estoque é aplicada no INSERT (trigger `BEFORE INSERT`) e na AP
 | `401` | Token ausente ou inválido |
 | `403` | Acesso negado (ex: loja de outra organização) |
 | `404` | Recurso não encontrado |
-| `422` | Transição de status inválida; estoque insuficiente; endereço insuficiente para geocodificar; pedido aguardando aprovação do cliente (`AWAITING_CUSTOMER_APPROVAL`) |
+| `422` | Transição de status inválida; estoque insuficiente; endereço insuficiente para geocodificar; pedido aguardando aprovação do cliente (`AWAITING_CUSTOMER_APPROVAL`); loja fechada temporariamente (`STORE_TEMPORARILY_CLOSED`); loja sem atendimento hoje (`STORE_CLOSED_TODAY`); fora do horário de funcionamento (`STORE_OUTSIDE_HOURS`) |
 | `500` | Erro interno |
 
 ---
