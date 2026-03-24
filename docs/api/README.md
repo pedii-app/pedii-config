@@ -126,6 +126,16 @@ O agente deve usar o `instance_name` para enviar mensagens via Evolution API.
 
 > Rota **exclusiva do agente** — somente `AGENT_API_KEY`. Aceita `GET` (query string) ou `POST` (body JSON).
 
+**Fluxo interno de geocoding (3 etapas):**
+1. **ViaCEP** (`viacep.com.br/ws/{cep}/json/`) → resolve o CEP para logradouro, bairro, cidade e estado
+2. **Nominatim** tenta geocodificar com fallbacks progressivos:
+   - `"Logradouro, Bairro, Cidade, UF, Brasil"` ← mais preciso
+   - `"Bairro, Cidade, UF, Brasil"`
+   - `"Cidade, UF, Brasil"` ← mínimo viável
+3. Primeira tentativa bem-sucedida é usada para o cálculo Haversine
+
+> Para distância entre lojas e cliente, coordenadas no nível da cidade são suficientes.
+
 | Parâmetro | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
 | `cep` | string | ✅ | CEP do cliente (8 dígitos, com ou sem hífen) |
@@ -185,9 +195,10 @@ O agente deve usar o `instance_name` para enviar mensagens via Evolution API.
 > **Regra de filtragem:** somente lojas onde o cliente está **dentro** do raio de atendimento são retornadas. Lojas sem `raio_entrega_km` configurado (`null`) são incluídas sem restrição de distância. Se nenhuma loja atender o CEP, `nearest_stores` retorna vazio com um campo `message` — **o agente deve informar ao cliente que não há cobertura de entrega no endereço dele**.
 
 **Erros:**
-- `400` — `cep` ou `organization_id` ausentes; CEP com formato inválido
+- `400` — `cep` ou `organization_id` ausentes; CEP com menos de 8 dígitos
 - `404` — nenhuma loja cadastrada para a org
-- `422` — CEP não pôde ser geocodificado (CEP inexistente ou inválido)
+- `422 (CEP não encontrado)` — ViaCEP retornou erro: CEP inexistente ou desativado nos Correios
+- `422 (geocoding falhou)` — CEP existe no ViaCEP mas nenhuma das tentativas retornou coordenadas no Nominatim; o body inclui `endereco_resolvido` para debug
 
 > O geocoding das lojas é lazy: se uma loja ainda não tem `lat/lng`, é geocodificada nesta chamada e as coordenadas são persistidas para uso futuro.
 

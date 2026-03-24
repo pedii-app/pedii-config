@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Pedii Agent API
-  version: 3.4.1
+  version: 3.4.2
   description: |
     APIs utilizadas pelo agente de vendas WhatsApp do Pedii.
 
@@ -594,12 +594,23 @@ paths:
       operationId: lojasProximas
       summary: Lojas mais próximas de um CEP
       description: |
-        Geocodifica o CEP do cliente e retorna as 3 lojas da organização com menor distância,
-        ordenadas por `distancia_km` crescente. Indica se o cliente está dentro do raio de entrega
-        de cada loja.
+        Geocodifica o CEP do cliente e retorna até 3 lojas da organização com menor distância
+        **dentro do raio de atendimento**, ordenadas por `distancia_km` crescente.
 
-        **Geocoding lazy:** se uma loja ainda não tem `lat/lng` cadastrada, é geocodificada nesta
-        chamada e as coordenadas são persistidas para uso futuro, acelerando chamadas seguintes.
+        **Fluxo interno de geocoding (3 etapas):**
+        1. **ViaCEP** (`viacep.com.br`) — resolve o CEP para logradouro, bairro, cidade e estado.
+           Se o CEP não existir nos Correios, retorna 422 imediatamente.
+        2. **Nominatim** — geocodifica com fallbacks progressivos:
+           - `"Logradouro, Bairro, Cidade, UF, Brasil"` (mais preciso)
+           - `"Bairro, Cidade, UF, Brasil"`
+           - `"Cidade, UF, Brasil"` (mínimo viável para Haversine)
+        3. Usa a primeira tentativa bem-sucedida.
+
+        **Geocoding lazy de lojas:** se uma loja ainda não tem `lat/lng` cadastrada, é geocodificada
+        nesta chamada e as coordenadas são persistidas para uso futuro.
+
+        **Filtragem por raio:** somente lojas onde `distancia_km ≤ raio_entrega_km` são retornadas.
+        Lojas sem `raio_entrega_km` configurado são incluídas sem restrição de distância.
 
         **Rota exclusiva do agente** — aceita somente `AGENT_API_KEY` (sem JWT de usuário).
         Aceita `GET` (query string) ou `POST` (body JSON).
@@ -729,9 +740,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-              example:
-                error: "Não foi possível geocodificar o CEP informado. Verifique se o CEP é válido."
-                cep: "00000000"
+              examples:
+                cep_nao_encontrado:
+                  summary: CEP não existe nos Correios (ViaCEP retornou erro)
+                  value:
+                    error: "CEP não encontrado. Verifique se o CEP é válido."
+                    cep: "00000000"
+                geocoding_falhou:
+                  summary: CEP existe mas não geocodificável pelo Nominatim
+                  value:
+                    error: "Não foi possível geocodificar o CEP informado. Verifique se a cidade está correta."
+                    cep: "37068180"
+                    endereco_resolvido: "Rua Heleno Crispim Maciel, Jardim Ribeiro, Varginha, MG, Brasil"
 
     post:
       operationId: lojasProximasPost
