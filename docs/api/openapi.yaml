@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Pedii Agent API
-  version: 3.6.0
+  version: 3.6.1
   description: |
     APIs utilizadas pelo agente de vendas WhatsApp do Pedii.
 
@@ -1333,7 +1333,7 @@ paths:
                         customers:
                           id: "3ed79bc1-c2f1-4c5c-95e4-d9fa1a212b4c"
                           nome: Eloá Mariane da Luz
-                          whatsapp: "35982721736"
+                          whatsapp: "5535982721736"
                     total: 1
                     page: 1
                     limit: 50
@@ -1357,7 +1357,7 @@ paths:
                       customers:
                         id: "3ed79bc1-c2f1-4c5c-95e4-d9fa1a212b4c"
                         nome: Eloá Mariane da Luz
-                        whatsapp: "35982721736"
+                        whatsapp: "5535982721736"
                       order_items:
                         - id: "3026e0e8-2f9f-4381-842d-054d01db7a40"
                           quantity: 15
@@ -1831,7 +1831,7 @@ webhooks:
                 customers:
                   id: "3ed79bc1-c2f1-4c5c-95e4-d9fa1a212b4c"
                   nome: Eloá Mariane da Luz
-                  whatsapp: "35982721736"
+                  whatsapp: "5535982721736"
                 order_items:
                   - id: "3026e0e8-2f9f-4381-842d-054d01db7a40"
                     quantity: 15

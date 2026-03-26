@@ -251,6 +251,8 @@ O agente deve usar o `instance_name` para enviar mensagens via Evolution API.
 
 > ⚠️ Informe `whatsapp` **ou** `id`.
 > O cliente pertence à **organização**, não à loja — use sempre `organization_id` diretamente. `store_id` é aceito como fallback: quando informado, a função resolve o `organization_id` internamente.
+>
+> **Normalização do WhatsApp:** o campo `whatsapp` é sempre armazenado e buscado no formato `DDI+DDD+Número` (ex: `5511982122686`). A função aceita qualquer formato como entrada (com ou sem DDI, com formatação) e normaliza automaticamente: remove caracteres não-numéricos e, se o número tiver ≤ 11 dígitos, adiciona o DDI `55` (Brasil). O agente **não precisa pré-formatar** o número antes de enviar.
 
 **Resposta 200:**
 ```json
@@ -297,6 +299,8 @@ Upsert por `whatsapp` + `organization_id`. Use para novos clientes ou atualizaç
 ```
 
 > `store_id` ainda é aceito no lugar de `organization_id` (retrocompatibilidade), mas `organization_id` é o campo canônico. Ao menos um dos dois deve ser informado.
+>
+> **Normalização do WhatsApp:** mesmo comportamento do GET — qualquer formato é aceito e normalizado para `DDI+DDD+Número` antes do upsert. O campo `whatsapp` retornado na resposta já estará no formato normalizado.
 
 **Resposta 201:** `{ "customer": { ...dados } }`
 
@@ -667,7 +671,7 @@ Disparado quando o lojista muda o status de um pedido pelo dashboard.
     "total": 310.00,
     "shipping_value": 10.00,
     "stores": { "apelido": "Paraguaçu", "razao_social": "TM Farma - Paraguaçu" },
-    "customers": { "nome": "Eloá Mariane da Luz", "whatsapp": "35982721736" },
+    "customers": { "nome": "Eloá Mariane da Luz", "whatsapp": "5535982721736" },
     "order_items": [
       {
         "quantity": 15,
