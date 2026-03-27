@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Pedii Agent API
-  version: 3.7.0
+  version: 3.8.0
   description: |
     APIs utilizadas pelo agente de vendas WhatsApp do Pedii.
 
@@ -73,6 +73,54 @@ components:
     # ─────────────────────────────────────────────────────────────────────────
     # Customer
     # ─────────────────────────────────────────────────────────────────────────
+    CustomerAddress:
+      type: object
+      description: Endereço de entrega de um cliente. Um cliente pode ter N endereços; apenas um tem is_default=true.
+      properties:
+        id:
+          type: string
+          format: uuid
+        label:
+          type: string
+          nullable: true
+          description: Identificação do endereço (ex:"Casa", "Trabalho"). Opcional.
+          example: "Casa"
+        logradouro:
+          type: string
+          nullable: true
+        numero:
+          type: string
+          nullable: true
+        complemento:
+          type: string
+          nullable: true
+        bairro:
+          type: string
+          nullable: true
+        cidade:
+          type: string
+          nullable: true
+        estado:
+          type: string
+          nullable: true
+          example: MG
+        cep:
+          type: string
+          nullable: true
+          example: "37062683"
+        lat:
+          type: number
+          format: double
+          nullable: true
+        lng:
+          type: number
+          format: double
+          nullable: true
+        is_default:
+          type: boolean
+          description: true para o endereço padrão do cliente. Apenas um endereço pode ser padrão por cliente.
+          example: true
+
     Customer:
       type: object
       properties:
@@ -86,34 +134,14 @@ components:
           type: string
           description: Número normalizado (somente dígitos, com DDI)
           example: "5531999990000"
-        cep:
-          type: string
-          example: "37062683"
-        logradouro:
-          type: string
-        numero:
-          type: string
-        complemento:
-          type: string
-          nullable: true
-        bairro:
-          type: string
-        cidade:
-          type: string
-        estado:
-          type: string
-          example: MG
-        lat:
-          type: number
-          format: double
-          nullable: true
-        lng:
-          type: number
-          format: double
-          nullable: true
         created_at:
           type: string
           format: date-time
+        customer_addresses:
+          type: array
+          description: Endereços do cliente, ordenados com is_default=true primeiro.
+          items:
+            $ref: '#/components/schemas/CustomerAddress'
 
     CustomerSummary:
       type: object
@@ -339,6 +367,15 @@ components:
           properties:
             customer:
               $ref: "#/components/schemas/CustomerSummary"
+            address_id:
+              type: string
+              format: uuid
+              nullable: true
+              description: |
+                UUID do endereço de customer_addresses usado no cálculo.
+                Pode ser o explicitamente fornecido ou o endereço padrão resolvido automaticamente.
+                Passe este valor como `address_id` no POST /orders para garantir consistência.
+              example: "a1b2c3d4-0000-0000-0000-000000000000"
             dentro_raio:
               type: boolean
               description: Se o cliente está dentro do raio de entrega da loja
@@ -1154,8 +1191,12 @@ paths:
         Recebe `loja_id` e `cliente_id`, calcula a distância via Haversine
         e retorna o valor do frete com base nas configurações da organização.
 
-        **Lazy geocoding:** se loja ou cliente ainda não têm lat/lng, a função geocodifica
-        automaticamente e persiste as coordenadas para chamadas futuras.
+        **Lazy geocoding:** se loja ou endereço do cliente ainda não têm lat/lng, a função geocodifica
+        automaticamente via ViaCEP + Nominatim e persiste as coordenadas em `customer_addresses` para chamadas futuras.
+
+        **Resolução de endereço:** usa `address_id` se fornecido; caso contrário, usa o endereço marcado como
+        `is_default` do cliente em `customer_addresses`. A resposta retorna o `address_id` resolvido para que
+        o agente possa passá-lo ao `POST /orders` garantindo consistência.
 
         **Lógica de cálculo:**
         1. `distancia_km × valor_por_km` = valor base
@@ -1180,9 +1221,17 @@ paths:
                 cliente_id:
                   type: string
                   format: uuid
+                address_id:
+                  type: string
+                  format: uuid
+                  nullable: true
+                  description: |
+                    UUID do endereço de entrega em customer_addresses.
+                    Opcional — se omitido, usa o endereço padrão (is_default=true) do cliente.
             example:
               loja_id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
               cliente_id: "ee4d2a74-25fd-4432-91a8-96121c6bf64e"
+              address_id: null
       responses:
         "200":
           description: Resultado do cálculo de frete
@@ -1200,6 +1249,7 @@ paths:
                       id: "3ed79bc1-c2f1-4c5c-95e4-d9fa1a212b4c"
                       nome: "João Silva"
                       whatsapp: "5531999990000"
+                    address_id: "a1b2c3d4-1234-5678-abcd-000000000001"
                     dentro_raio: true
                     distancia_km: 3.24
                     raio_entrega_km: 5.0
@@ -1432,6 +1482,14 @@ paths:
                 customer_id:
                   type: string
                   format: uuid
+                address_id:
+                  type: string
+                  format: uuid
+                  nullable: true
+                  description: |
+                    UUID do endereço de entrega (customer_addresses.id).
+                    Opcional — se omitido, o servidor usa o endereço padrão do cliente.
+                    Recomendado: passe o address_id retornado por POST /calculate-freight.
                 notes:
                   type: string
                   nullable: true

@@ -57,18 +57,20 @@ O agente deve usar o `instance_name` para enviar mensagens via Evolution API.
 3. GET /customers?organization_id=X&whatsapp=<numero_do_cliente>
    → O agente já sabe o whatsapp — consulta imediatamente sem pedir nada ao cliente
 
-   ┌─────────────────────────────────────────────┐
-   │ CLIENTE ENCONTRADO                          │
-   │ → Confirma com o cliente se o endereço      │
-   │   cadastrado ainda está correto             │
-   │ → Se mudou: POST /customers (atualiza CEP)  │
-   │ → CEP disponível: usa o cadastrado          │
-   └─────────────────────────────────────────────┘
-   ┌─────────────────────────────────────────────┐
-   │ CLIENTE NÃO ENCONTRADO                      │
-   │ → Pede apenas o CEP ao cliente              │
-   │ → Cadastro adiado — sem fricção no início   │
-   └─────────────────────────────────────────────┘
+   ┌──────────────────────────────────────────────────────┐
+   │ CLIENTE ENCONTRADO                                   │
+   │ a) Se tem 1 endereço: confirma se ainda está correto │
+   │    → Se mudou: PATCH /customers add_address (novo)   │
+   │      ou POST /customers (atualiza endereço padrão)   │
+   │ b) Se tem múltiplos endereços: apresenta lista e     │
+   │    pergunta em qual deseja receber o pedido          │
+   │ c) CEP do endereço escolhido disponível para step 4  │
+   └──────────────────────────────────────────────────────┘
+   ┌──────────────────────────────────────────────────────┐
+   │ CLIENTE NÃO ENCONTRADO                               │
+   │ → Pede apenas o CEP ao cliente                       │
+   │ → Cadastro adiado — sem fricção no início            │
+   └──────────────────────────────────────────────────────┘
         ↓ (em ambos os casos, CEP está disponível)
 4. GET /nearest-stores?organization_id=X&cep=<CEP_do_cliente>
    → Retorna até 3 lojas dentro do raio de entrega, ordenadas por distância
@@ -77,13 +79,17 @@ O agente deve usar o `instance_name` para enviar mensagens via Evolution API.
 5. GET /products?store_id=<loja_escolhida>&in_stock=true
    → Catálogo da loja escolhida; cliente monta o carrinho
         ↓
-6. POST /calculate-freight  ← confirma raio e calcula valor do frete
+6. POST /calculate-freight { loja_id, cliente_id, address_id? }
+   → Confirma raio, calcula frete e prazo
+   → Retorna address_id resolvido (usar no step 8)
         ↓
 7. [Somente se cliente NÃO estava cadastrado]
    → Agente pede nome e endereço completo para finalizar
-   → POST /customers  ← cria o cadastro antes de registrar o pedido
+   → POST /customers  ← cria o cadastro com endereço padrão
         ↓
-8. POST /orders  ← registra o pedido no dashboard do lojista
+8. POST /orders { ..., address_id }
+   ← address_id vem da resposta do calculate-freight (step 6)
+   ← garante que o endereço de entrega registrado é o mesmo usado no cálculo
         ↓
 9a. [Webhook recebido] order.status_changed  ← lojista atualizou status
     → Agente notifica cliente via WhatsApp (instance_name + customer.whatsapp)
@@ -262,26 +268,36 @@ O agente deve usar o `instance_name` para enviar mensagens via Evolution API.
     "id": "uuid",
     "nome": "João Silva",
     "whatsapp": "5531999990000",
-    "cep": "37062683",
-    "logradouro": "Av. do Contorno",
-    "numero": "40",
-    "complemento": null,
-    "bairro": "Santa Luiza",
-    "cidade": "Varginha",
-    "estado": "MG",
-    "lat": -21.5512,
-    "lng": -45.4333,
-    "created_at": "2026-03-20T12:00:00Z"
+    "created_at": "2026-03-20T12:00:00Z",
+    "customer_addresses": [
+      {
+        "id": "uuid-do-endereco",
+        "label": "Casa",
+        "logradouro": "Av. do Contorno",
+        "numero": "40",
+        "complemento": null,
+        "bairro": "Santa Luiza",
+        "cidade": "Varginha",
+        "estado": "MG",
+        "cep": "37062683",
+        "lat": -21.5512,
+        "lng": -45.4333,
+        "is_default": true
+      }
+    ]
   }
 }
 ```
 Se não encontrado: `{ "found": false, "customer": null }`
 
+> O array `customer_addresses` vem ordenado com o endereço padrão (`is_default: true`) primeiro.
+> **Para o agente:** ao receber um cliente já cadastrado com múltiplos endereços, apresente as opções ao cliente e pergunte em qual deseja receber o pedido. Use o `id` do endereço escolhido como `address_id` nas chamadas de `calculate-freight` e `POST /orders`.
+
 ---
 
 ### `POST /customers` — Criar ou atualizar cliente
 
-Upsert por `whatsapp` + `organization_id`. Use para novos clientes ou atualização de endereço.
+Upsert por `whatsapp` + `organization_id`. Cria o cliente e, opcionalmente, o endereço padrão em `customer_addresses`.
 
 **Body:**
 ```json
@@ -294,17 +310,83 @@ Upsert por `whatsapp` + `organization_id`. Use para novos clientes ou atualizaç
   "bairro": "Santa Luiza",
   "cidade": "Varginha",
   "estado": "MG",
-  "cep": "37062683"
+  "cep": "37062683",
+  "address_label": "Casa"
 }
 ```
 
 > `store_id` ainda é aceito no lugar de `organization_id` (retrocompatibilidade), mas `organization_id` é o campo canônico. Ao menos um dos dois deve ser informado.
 >
 > **Normalização do WhatsApp:** mesmo comportamento do GET — qualquer formato é aceito e normalizado para `DDI+DDD+Número` antes do upsert. O campo `whatsapp` retornado na resposta já estará no formato normalizado.
+>
+> **Endereço:** se campos de endereço (`logradouro`, `cep` ou `cidade`) forem enviados, a função cria ou atualiza automaticamente o endereço padrão do cliente em `customer_addresses`. O campo `address_label` (opcional) define a identificação do endereço (ex: `"Casa"`, `"Trabalho"`).
 
-**Resposta 201:** `{ "customer": { ...dados } }`
+**Resposta 201:** `{ "customer": { id, nome, whatsapp, created_at, customer_addresses: [...] } }`
 
-> O geocoding de lat/lng acontece automaticamente via trigger.
+---
+
+### `PATCH /customers` — Gerenciar endereços do cliente
+
+Permite ao agente adicionar, editar, definir como padrão ou excluir endereços de um cliente.
+
+**Body base:**
+```json
+{ "customer_id": "uuid", "action": "add_address" }
+```
+
+#### `add_address` — Adicionar novo endereço
+
+```json
+{
+  "customer_id": "uuid",
+  "action": "add_address",
+  "address": {
+    "label": "Trabalho",
+    "logradouro": "Rua XV de Novembro",
+    "numero": "200",
+    "bairro": "Centro",
+    "cidade": "Varginha",
+    "estado": "MG",
+    "cep": "37002100",
+    "is_default": false
+  }
+}
+```
+
+**Resposta 200:** `{ "address": { id, label, logradouro, ..., is_default } }`
+
+#### `update_address` — Editar endereço existente
+
+```json
+{
+  "customer_id": "uuid",
+  "action": "update_address",
+  "address_id": "uuid-do-endereco",
+  "address": { "numero": "205", "complemento": "Sala 3" }
+}
+```
+
+#### `set_default_address` — Definir endereço padrão
+
+```json
+{
+  "customer_id": "uuid",
+  "action": "set_default_address",
+  "address_id": "uuid-do-endereco"
+}
+```
+
+#### `delete_address` — Excluir endereço
+
+```json
+{
+  "customer_id": "uuid",
+  "action": "delete_address",
+  "address_id": "uuid-do-endereco"
+}
+```
+
+**Resposta 200:** `{ "success": true }`
 
 ---
 
@@ -357,8 +439,14 @@ Busca produtos da organização. Pode filtrar por loja específica ou retornar o
 
 **Body:**
 ```json
-{ "loja_id": "uuid-da-loja", "cliente_id": "uuid-do-cliente" }
+{
+  "loja_id": "uuid-da-loja",
+  "cliente_id": "uuid-do-cliente",
+  "address_id": "uuid-do-endereco"
+}
 ```
+
+> `address_id` é **opcional**. Se omitido, a função usa o endereço marcado como `is_default` do cliente em `customer_addresses`. Passe `address_id` explicitamente quando o cliente escolher um endereço diferente do padrão.
 
 **Resposta 200:**
 ```json
@@ -384,6 +472,7 @@ Busca produtos da organização. Pode filtrar por loja específica ou retornar o
 
 | Campo | Descrição |
 |---|---|
+| `address_id` | UUID do endereço usado no cálculo (pode ser o padrão resolvido automaticamente ou o explicitamente informado). Use este valor no `address_id` do `POST /orders`. |
 | `estimated_delivery_minutes` | Tempo estimado de entrega em minutos, calculado por interpolação linear entre `tempo_entrega_min` e `tempo_entrega_max` da loja, proporcionalmente à distância em relação ao raio. Arredondado para múltiplo de 5. `null` se `dentro_raio = false`. |
 
 **Fórmula:**
@@ -406,6 +495,7 @@ Exemplo: `tempo_min=20`, `tempo_max=60`, `raio=10km`, `distancia=3km` → `20 + 
 {
   "store_id": "uuid-da-loja",
   "customer_id": "uuid-do-cliente",
+  "address_id": "uuid-do-endereco",
   "notes": "Entregar no período da tarde",
   "shipping_value": 9.72,
   "shipping_distance_km": 3.24,
@@ -417,6 +507,8 @@ Exemplo: `tempo_min=20`, `tempo_max=60`, `raio=10km`, `distancia=3km` → `20 + 
 ```
 
 > Os campos `shipping_*` devem ser preenchidos com os valores retornados por `POST /calculate-freight`. O campo `estimated_delivery_minutes` é calculado automaticamente pelo servidor com base em `shipping_distance_km` e na configuração de tempo da loja — **não precisa ser enviado no body**.
+>
+> `address_id` é **opcional**. Se informado, é persistido como `delivery_address_id` no pedido. Se omitido, o servidor resolve automaticamente o endereço padrão do cliente. **Recomendado:** passe o `address_id` retornado por `POST /calculate-freight` para garantir consistência entre o endereço usado no cálculo e o endereço de entrega registrado no pedido.
 
 **Resposta 201:**
 ```json
