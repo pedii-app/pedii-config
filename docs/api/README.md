@@ -469,14 +469,23 @@ Busca produtos da organização. Pode filtrar por loja específica ou retornar o
 
 | Parâmetro | Tipo | Descrição |
 |---|---|---|
-| `store_id` | uuid | ✅ Obrigatório para listagem |
 | `id` | uuid | Buscar pedido único (retorna itens completos) |
+| `organization_id` | uuid | ⚠️ Filtrar pedidos da org (alternativa a `store_id`) |
+| `store_id` | uuid | ⚠️ Filtrar por loja (resolve `organization_id` automaticamente) |
+| `customer_id` | uuid | ⚠️ Filtrar por cliente (resolve `organization_id` automaticamente) |
 | `status` | string | Filtrar por status (`open`, `accepted`, `shipped`, `received`, `cancelled`) |
-| `customer_id` | uuid | Filtrar por cliente |
 | `date_from` | date | Data inicial (`2026-03-01`) |
 | `date_to` | date | Data final (`2026-03-31`) |
 | `page` | int | Paginação (padrão: 1) |
 | `limit` | int | Itens por página (padrão: 50, máx: 100) |
+
+> ⚠️ Para listagem, informe **ao menos um** de: `id`, `organization_id`, `store_id` ou `customer_id`.
+> Quando apenas `customer_id` é fornecido, a função resolve o `organization_id` diretamente do cadastro do cliente — o agente não precisa enviá-lo explicitamente.
+>
+> **Exemplo de uso pelo agente** (buscar pedidos em aberto de um cliente):
+> ```
+> GET /orders?customer_id=<uuid>&status=open
+> ```
 
 **Resposta 200 (listagem):**
 ```json

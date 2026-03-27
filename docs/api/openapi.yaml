@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Pedii Agent API
-  version: 3.6.1
+  version: 3.6.2
   description: |
     APIs utilizadas pelo agente de vendas WhatsApp do Pedii.
 
@@ -1234,34 +1234,47 @@ paths:
         Retorna lista paginada de pedidos de uma loja, ou um pedido específico com todos os detalhes.
 
         Para buscar um pedido único (com itens e produtos), passe apenas `id` como parâmetro.
-        Para listar, passe `store_id` e os filtros desejados.
+        Para listar, informe ao menos um de `id`, `organization_id`, `store_id` ou `customer_id`.
+
+        Quando apenas `customer_id` é fornecido, a função resolve o `organization_id`
+        diretamente do cadastro do cliente — o agente não precisa enviá-lo explicitamente.
 
         Todas as respostas incluem `organization_id`, `instance_name` e `customers.whatsapp`.
       parameters:
-        - name: store_id
-          in: query
-          schema:
-            type: string
-            format: uuid
-          description: ID da loja. Obrigatório para listagem.
         - name: id
           in: query
           schema:
             type: string
             format: uuid
           description: UUID do pedido. Retorna pedido único com todos os detalhes (itens + produtos).
-        - name: status
+        - name: organization_id
           in: query
           schema:
             type: string
-            enum: [open, accepted, shipped, received, cancelled]
-          description: Filtrar por status
+            format: uuid
+          description: >
+            ID da organização. Alternativa a store_id para listar todos os pedidos da org.
+            Não é necessário quando customer_id é informado (a função resolve automaticamente).
+        - name: store_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: ID da loja. Resolve organization_id automaticamente quando informado.
         - name: customer_id
           in: query
           schema:
             type: string
             format: uuid
-          description: Filtrar por cliente
+          description: >
+            Filtrar por cliente. Resolve organization_id automaticamente — pode ser usado
+            como único parâmetro de escopo (ex: buscar pedidos em aberto de um cliente).
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [open, accepted, shipped, received, cancelled]
+          description: Filtrar por status. Valores válidos&#58; open, accepted, shipped, received, cancelled.
         - name: date_from
           in: query
           schema:
