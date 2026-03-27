@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Pedii Agent API
-  version: 3.6.2
+  version: 3.7.0
   description: |
     APIs utilizadas pelo agente de vendas WhatsApp do Pedii.
 
@@ -264,6 +264,14 @@ components:
         shipping_within_radius:
           type: boolean
           nullable: true
+        estimated_delivery_minutes:
+          type: integer
+          nullable: true
+          description: |
+            Tempo estimado de entrega em minutos persistido no pedido.
+            Calculado automaticamente no POST /orders com base em shipping_distance_km
+            e nos campos tempo_entrega_min/max da loja. null se fora do raio.
+          example: 35
         agent_created:
           type: boolean
           description: True se o pedido foi criado pelo agente via API
@@ -349,6 +357,15 @@ components:
             frete_gratis:
               type: boolean
               description: True se o frete foi zerado por regra de negócio
+            estimated_delivery_minutes:
+              type: integer
+              nullable: true
+              description: |
+                Tempo estimado de entrega em minutos, calculado por interpolação linear
+                entre os campos `tempo_entrega_min` e `tempo_entrega_max` da loja,
+                proporcionalmente à distância relativa ao raio. Arredondado p/ múltiplo de 5.
+                `null` se o cliente estiver fora do raio (`dentro_raio = false`).
+              example: 35
             pedido_minimo_entrega:
               type: number
               description: Valor mínimo do pedido para habilitar entrega. Zero = sem mínimo.
@@ -1188,6 +1205,7 @@ paths:
                     raio_entrega_km: 5.0
                     valor_frete: 9.72
                     frete_gratis: false
+                    estimated_delivery_minutes: 35
                     pedido_minimo_entrega: 30.00
                     frete_gratis_acima_de: 100.00
                     _geocodificado:

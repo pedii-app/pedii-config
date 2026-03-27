@@ -353,7 +353,7 @@ Busca produtos da organização. Pode filtrar por loja específica ou retornar o
 
 ---
 
-### `POST /calculate-freight` — Calcular frete e raio de entrega
+### `POST /calculate-freight` — Calcular frete e prazo de entrega
 
 **Body:**
 ```json
@@ -375,14 +375,27 @@ Busca produtos da organização. Pode filtrar por loja específica ou retornar o
   "raio_entrega_km": 5.0,
   "valor_frete": 9.72,
   "frete_gratis": false,
+  "estimated_delivery_minutes": 35,
   "pedido_minimo_entrega": 30.00,
   "frete_gratis_acima_de": 100.00,
   "_geocodificado": { "loja": false, "cliente": false }
 }
 ```
 
+| Campo | Descrição |
+|---|---|
+| `estimated_delivery_minutes` | Tempo estimado de entrega em minutos, calculado por interpolação linear entre `tempo_entrega_min` e `tempo_entrega_max` da loja, proporcionalmente à distância em relação ao raio. Arredondado para múltiplo de 5. `null` se `dentro_raio = false`. |
+
+**Fórmula:**
+```
+tempo = tempo_min + (distancia_km / raio_km) × (tempo_max - tempo_min)
+→ arredondado para múltiplo de 5 minutos
+```
+
+Exemplo: `tempo_min=20`, `tempo_max=60`, `raio=10km`, `distancia=3km` → `20 + (3/10)×40 = 32 → 30 min`
+
 > Se `dentro_raio: false`, informar ao cliente que a loja não entrega no endereço dele.
-> O campo `customer.whatsapp` pode ser usado para confirmar o número do cliente no conversacional.
+> Use `estimated_delivery_minutes` para informar o prazo ao cliente durante o checkout: _"Entrega estimada em ~35 minutos"_.
 
 ---
 
@@ -402,6 +415,8 @@ Busca produtos da organização. Pode filtrar por loja específica ou retornar o
   ]
 }
 ```
+
+> Os campos `shipping_*` devem ser preenchidos com os valores retornados por `POST /calculate-freight`. O campo `estimated_delivery_minutes` é calculado automaticamente pelo servidor com base em `shipping_distance_km` e na configuração de tempo da loja — **não precisa ser enviado no body**.
 
 **Resposta 201:**
 ```json
