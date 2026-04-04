@@ -50,8 +50,9 @@ O agente deve usar o `instance_name` para enviar mensagens via Evolution API.
 1. Mensagem recebida do cliente via WhatsApp
    (Evolution fornece: instance_name + whatsapp do cliente)
         ↓
-2. GET /resolve-org?instance_name=<nome_da_instancia>
+2. GET /resolve-org?instance_name=<nome_da_instancia>&thread_id=<whatsapp_do_cliente>
    → Resolve organization_id a partir do nome da instância Evolution
+   → Persiste mapeamento thread_id → org no banco (exibe conversa no dashboard imediatamente)
    → Usado em todas as chamadas subsequentes
         ↓
 3. GET /customers?organization_id=X&whatsapp=<numero_do_cliente>
@@ -117,6 +118,7 @@ O agente deve usar o `instance_name` para enviar mensagens via Evolution API.
 | Parâmetro | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
 | `instance_name` | string | ✅ | Nome exato da instância no Evolution API |
+| `thread_id` | string | ⚠️ Recomendado | Número WhatsApp do cliente (ex: `5511998887766`). Quando fornecido, persiste o mapeamento `thread_id → organization_id` na tabela `thread_context`, fazendo a conversa aparecer no dashboard Pedii **imediatamente**, antes mesmo da criação do cadastro do cliente. |
 
 **Resposta 200 (encontrada):**
 ```json

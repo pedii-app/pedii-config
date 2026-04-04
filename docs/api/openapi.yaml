@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Pedii Agent API
-  version: 3.8.0
+  version: 3.9.0
   description: |
     APIs utilizadas pelo agente de vendas WhatsApp do Pedii.
 
@@ -592,6 +592,12 @@ paths:
 
         Se `found: false` (404), a instância não está cadastrada no Pedii e o
         agente não deve prosseguir com o fluxo de vendas.
+
+        **Parâmetro `thread_id` (recomendado):** quando o número WhatsApp do cliente
+        é fornecido, a rota persiste o mapeamento `thread_id → organization_id` na
+        tabela `thread_context`. Isso faz a conversa aparecer no dashboard Pedii em
+        tempo real antes mesmo da criação do cadastro do cliente. Sem esse parâmetro,
+        a conversa só aparece após o `POST /customers`.
       parameters:
         - name: instance_name
           in: query
@@ -600,6 +606,16 @@ paths:
             type: string
           description: Nome exato da instância no Evolution API
           example: "pedii_f988b66e"
+        - name: thread_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: |
+            Número WhatsApp do cliente no formato internacional sem `+` (ex: `5511998887766`).
+            Quando fornecido, faz upsert em `thread_context` para exibição imediata da conversa
+            no dashboard, mesmo antes da criação do customer.
+          example: "5511998887766"
       responses:
         "200":
           description: Instância encontrada — retorna o organization_id do tenant
