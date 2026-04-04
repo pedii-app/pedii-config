@@ -966,6 +966,42 @@ Este webhook complementa o node `check_handoff`: enquanto a verificação ativa 
 
 ---
 
+### Evento: `conversation.message`
+
+Disparado quando o **atendente humano** (em modo handoff) envia uma mensagem diretamente ao cliente pelo dashboard Conversas.
+
+O agente deve:
+1. Enviar o `content` ao cliente via Evolution API (usando `instance_name` extraído do `thread_id`)
+2. Persistir a mensagem no LangGraph como `AIMessage` para manter o histórico da conversa
+
+> **Extração do `instance_name`:** o `thread_id` tem formato `"{instance_name}:{whatsapp}"`. Extrair com `thread_id.split(':')[0]` e `thread_id.split(':')[1]`.
+
+**Payload:**
+```json
+{
+  "event": "conversation.message",
+  "thread_id": "pedii_f988b66e:5511982122686",
+  "content": "Olá! Deixa eu verificar isso para você.",
+  "organization_id": "f988b66e-21e6-48d5-a90d-08f746600763",
+  "activated_by_name": "Wilson Junior",
+  "timestamp": "2026-04-04T14:35:00Z"
+}
+```
+
+| Campo | Descrição |
+|---|---|
+| `event` | Sempre `"conversation.message"` |
+| `thread_id` | Identificador da conversa — contém `instance_name` e `whatsapp` do cliente |
+| `content` | Texto da mensagem a ser enviada ao cliente |
+| `activated_by_name` | Nome do atendente que enviou |
+| `timestamp` | ISO 8601 do envio |
+
+> **Garantia de handoff ativo:** a edge function valida que existe um `handoff_session` ativo antes de despachar este webhook — o agente não receberá `conversation.message` de conversas sem handoff ativo.
+
+> **Persistência no LangGraph:** ao gravar como `AIMessage`, a mensagem aparecerá automaticamente no dashboard via Realtime (subscription em `checkpoint_blobs`).
+
+---
+
 ## Campo `awaiting_customer_approval`
 
 O campo `awaiting_customer_approval` (boolean) está presente em todos os pedidos e controla o fluxo de aprovação quando o atendente edita itens antes do aceite.

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Pedii Agent API
-  version: 3.10.0
+  version: 3.11.0
   description: |
     APIs utilizadas pelo agente de vendas WhatsApp do Pedii.
 
@@ -2011,6 +2011,80 @@ webhooks:
       responses:
         "200":
           description: Evento processado com sucesso pelo agente
+        "4XX":
+          description: Erro no processamento (Pedii registra mas não retenta)
+
+  conversation.message:
+    post:
+      summary: Atendente enviou mensagem ao cliente pelo dashboard
+      description: |
+        Disparado quando o **atendente humano** (em modo handoff) digita e envia uma
+        mensagem diretamente pelo painel de Conversas do dashboard SaaS.
+
+        **O agente deve:**
+        1. Extrair `instance_name` e `whatsapp` do `thread_id` (`"{instance_name}:{whatsapp}"`)
+        2. Enviar `content` ao cliente via Evolution API usando o `instance_name`
+        3. Persistir como `AIMessage` no LangGraph checkpoint do `thread_id` para manter histórico
+
+        > A edge function valida que o handoff está ativo antes de despachar este evento —
+        > o agente nunca receberá `conversation.message` de conversas sem handoff ativo.
+
+        > Ao persistir no LangGraph, o Realtime do Supabase dispara automaticamente e a
+        > mensagem aparece no chat do dashboard sem necessidade de polling.
+
+        **Autenticação recebida:**
+        - Header `x-api-key: <AGENT_API_KEY>`
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - event
+                - thread_id
+                - content
+                - organization_id
+                - timestamp
+              properties:
+                event:
+                  type: string
+                  enum: [conversation.message]
+                  example: "conversation.message"
+                thread_id:
+                  type: string
+                  description: |
+                    Identificador composto da conversa "{instance_name}:{whatsapp}".
+                    Extrair instance_name: thread_id.split(':')[0]
+                    Extrair whatsapp: thread_id.split(':')[1]
+                  example: "pedii_f988b66e:5511982122686"
+                content:
+                  type: string
+                  description: Texto da mensagem a ser enviada ao cliente
+                  example: "Olá! Deixa eu verificar isso para você."
+                organization_id:
+                  type: string
+                  format: uuid
+                  example: "f988b66e-21e6-48d5-a90d-08f746600763"
+                activated_by_name:
+                  type: string
+                  nullable: true
+                  description: Nome do atendente que enviou a mensagem
+                  example: "Wilson Junior"
+                timestamp:
+                  type: string
+                  format: date-time
+                  example: "2026-04-04T14:35:00Z"
+            example:
+              event: conversation.message
+              thread_id: "pedii_f988b66e:5511982122686"
+              content: "Olá! Deixa eu verificar isso para você."
+              organization_id: "f988b66e-21e6-48d5-a90d-08f746600763"
+              activated_by_name: "Wilson Junior"
+              timestamp: "2026-04-04T14:35:00Z"
+      responses:
+        "200":
+          description: Mensagem enviada e persistida com sucesso pelo agente
         "4XX":
           description: Erro no processamento (Pedii registra mas não retenta)
 
