@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Pedii Agent API
-  version: 3.9.1
+  version: 3.9.2
   description: |
     APIs utilizadas pelo agente de vendas WhatsApp do Pedii.
 
@@ -592,12 +592,6 @@ paths:
 
         Se `found: false` (404), a instância não está cadastrada no Pedii e o
         agente não deve prosseguir com o fluxo de vendas.
-
-        **Parâmetro `thread_id` (recomendado):** quando o número WhatsApp do cliente
-        é fornecido, a rota persiste o mapeamento `thread_id → organization_id` na
-        tabela `thread_context`. Isso faz a conversa aparecer no dashboard Pedii em
-        tempo real antes mesmo da criação do cadastro do cliente. Sem esse parâmetro,
-        a conversa só aparece após o `POST /customers`.
       parameters:
         - name: instance_name
           in: query
@@ -606,26 +600,6 @@ paths:
             type: string
           description: Nome exato da instância no Evolution API
           example: "pedii_f988b66e"
-        - name: thread_id
-          in: query
-          required: false
-          schema:
-            type: string
-          description: |
-            Identificador único da conversa no LangGraph checkpointer.
-
-            **Formato obrigatório:** `{instance_name}:{whatsapp_do_cliente}`
-
-            Exemplo: `pedii_farmaciaA:5511998887766`
-
-            O formato composto é obrigatório para garantir isolamento multi-tenant: o mesmo
-            número de WhatsApp pode comprar em orgs diferentes e cada par (instância, cliente)
-            terá seu próprio checkpoint isolado no LangGraph. Usar apenas o número do cliente
-            como thread_id causaria contaminação de contexto entre orgs.
-
-            Quando fornecido, faz upsert em `thread_context (thread_id, organization_id)` para
-            exibição imediata da conversa no dashboard, mesmo antes da criação do customer.
-          example: "pedii_farmaciaA:5511998887766"
       responses:
         "200":
           description: Instância encontrada — retorna o organization_id do tenant
