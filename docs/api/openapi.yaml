@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Pedii Agent API
-  version: 3.9.0
+  version: 3.9.1
   description: |
     APIs utilizadas pelo agente de vendas WhatsApp do Pedii.
 
@@ -612,10 +612,20 @@ paths:
           schema:
             type: string
           description: |
-            Número WhatsApp do cliente no formato internacional sem `+` (ex: `5511998887766`).
-            Quando fornecido, faz upsert em `thread_context` para exibição imediata da conversa
-            no dashboard, mesmo antes da criação do customer.
-          example: "5511998887766"
+            Identificador único da conversa no LangGraph checkpointer.
+
+            **Formato obrigatório:** `{instance_name}:{whatsapp_do_cliente}`
+
+            Exemplo: `pedii_farmaciaA:5511998887766`
+
+            O formato composto é obrigatório para garantir isolamento multi-tenant: o mesmo
+            número de WhatsApp pode comprar em orgs diferentes e cada par (instância, cliente)
+            terá seu próprio checkpoint isolado no LangGraph. Usar apenas o número do cliente
+            como thread_id causaria contaminação de contexto entre orgs.
+
+            Quando fornecido, faz upsert em `thread_context (thread_id, organization_id)` para
+            exibição imediata da conversa no dashboard, mesmo antes da criação do customer.
+          example: "pedii_farmaciaA:5511998887766"
       responses:
         "200":
           description: Instância encontrada — retorna o organization_id do tenant

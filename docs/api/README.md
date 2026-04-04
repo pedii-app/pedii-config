@@ -50,7 +50,7 @@ O agente deve usar o `instance_name` para enviar mensagens via Evolution API.
 1. Mensagem recebida do cliente via WhatsApp
    (Evolution fornece: instance_name + whatsapp do cliente)
         ↓
-2. GET /resolve-org?instance_name=<nome_da_instancia>&thread_id=<whatsapp_do_cliente>
+2. GET /resolve-org?instance_name=<nome_da_instancia>&thread_id=<instance_name>:<whatsapp_do_cliente>
    → Resolve organization_id a partir do nome da instância Evolution
    → Persiste mapeamento thread_id → org no banco (exibe conversa no dashboard imediatamente)
    → Usado em todas as chamadas subsequentes
@@ -118,7 +118,7 @@ O agente deve usar o `instance_name` para enviar mensagens via Evolution API.
 | Parâmetro | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
 | `instance_name` | string | ✅ | Nome exato da instância no Evolution API |
-| `thread_id` | string | ⚠️ Recomendado | Número WhatsApp do cliente (ex: `5511998887766`). Quando fornecido, persiste o mapeamento `thread_id → organization_id` na tabela `thread_context`, fazendo a conversa aparecer no dashboard Pedii **imediatamente**, antes mesmo da criação do cadastro do cliente. |
+| `thread_id` | string | ⚠️ Recomendado | Identificador único da conversa no LangGraph (ver formato obrigatório abaixo). |
 
 **Resposta 200 (encontrada):**
 ```json
@@ -141,6 +141,24 @@ O agente deve usar o `instance_name` para enviar mensagens via Evolution API.
 ```
 
 > Se `found: false`, a instância não está cadastrada no Pedii. O agente não deve prosseguir.
+
+#### ⚠️ Formato obrigatório do `thread_id` no LangGraph
+
+O `thread_id` usado pelo agente no LangGraph **deve ser composto** por `instance_name` + `:` + número WhatsApp do cliente:
+
+```
+thread_id = "{instance_name}:{whatsapp_do_cliente}"
+
+# Exemplos:
+"pedii_farmaciaA:5511999887766"
+"pedii_farmaciaB:5511999887766"   ← mesmo cliente, org diferente → thread separado
+```
+
+**Por que isso é obrigatório:** o LangGraph isola o histórico de conversas pelo `thread_id`. Se dois agentes de orgs diferentes usarem apenas o número do cliente como `thread_id`, eles compartilhariam o mesmo checkpoint no banco — as mensagens ficariam misturadas e haveria contaminação de contexto entre orgs (quebra de isolamento multi-tenant).
+
+Usando o formato composto, cada par `(instância, cliente)` tem seu próprio histórico isolado no LangGraph.
+
+> O `thread_id` composto deve ser passado tanto no parâmetro `thread_id` desta rota quanto como `thread_id` do LangGraph checkpointer.
 
 ---
 
