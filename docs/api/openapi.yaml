@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Pedii Agent API
-  version: 3.9.2
+  version: 3.10.0
   description: |
     APIs utilizadas pelo agente de vendas WhatsApp do Pedii.
 
@@ -665,6 +665,85 @@ paths:
           description: Erro interno
 
   # ──────────────────────────────────────────────────────────────────────────
+  # CONVERSATIONS — verificação de handoff (node check_handoff)
+  # ──────────────────────────────────────────────────────────────────────────
+  /conversations:
+    get:
+      operationId: verificarHandoff
+      summary: Verificar se uma conversa está em handoff (node check_handoff)
+      description: |
+        **Chamado no início de cada turno de conversa**, antes de qualquer lógica de negócio.
+
+        Verifica se um lojista assumiu o atendimento direto desta conversa no dashboard SaaS.
+
+        **Se `handoff_active: true`:**
+        - O agente NÃO deve processar a mensagem do cliente
+        - O agente NÃO deve enviar respostas via WhatsApp
+        - O agente entra em modo silencioso até receber o webhook `conversation.handoff` com `action: "end"`
+
+        **Se `handoff_active: false`:**
+        - O agente segue o fluxo normalmente
+
+        **Implementação sugerida:** criar um node `check_handoff` como primeiro node do grafo
+        LangGraph. Se `handoff_active: true`, o node retorna estado que encerra o turno sem resposta.
+
+        **Rota exclusiva do agente** — somente `AGENT_API_KEY` (retorna 401 para JWT de usuário).
+      parameters:
+        - name: thread_id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: |
+            Identificador composto da conversa: `"{instance_name}:{whatsapp_do_cliente}"`.
+            Exemplo: `"pedii_f988b66e:5511982122686"`
+      responses:
+        "200":
+          description: Status de handoff da conversa
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  thread_id:
+                    type: string
+                    description: thread_id consultado
+                    example: "pedii_f988b66e:5511982122686"
+                  handoff_active:
+                    type: boolean
+                    description: true se um lojista assumiu o atendimento desta conversa
+                    example: false
+                  activated_by_name:
+                    type: string
+                    nullable: true
+                    description: Nome do lojista que ativou o handoff. null se handoff_active=false.
+                    example: "Wilson Junior"
+                  started_at:
+                    type: string
+                    format: date-time
+                    nullable: true
+                    description: Timestamp de início do handoff. null se handoff_active=false.
+                    example: "2026-04-04T14:30:00Z"
+              examples:
+                sem_handoff:
+                  summary: Conversa gerenciada pelo agente (normal)
+                  value:
+                    thread_id: "pedii_f988b66e:5511982122686"
+                    handoff_active: false
+                    activated_by_name: null
+                    started_at: null
+                com_handoff:
+                  summary: Lojista assumiu o atendimento
+                  value:
+                    thread_id: "pedii_f988b66e:5511982122686"
+                    handoff_active: true
+                    activated_by_name: "Wilson Junior"
+                    started_at: "2026-04-04T14:30:00Z"
+        "400":
+          description: Parâmetro thread_id ausente
+        "401":
+          description: API key inválida ou ausente
+
   # ──────────────────────────────────────────────────────────────────────────
   # NEAREST STORES
   # ──────────────────────────────────────────────────────────────────────────
@@ -1929,6 +2008,93 @@ webhooks:
                     products:
                       id: "d5fbd8da-de30-43f8-ba35-99ff2758ed32"
                       descricao: Produto Teste Paraguaçu
+      responses:
+        "200":
+          description: Evento processado com sucesso pelo agente
+        "4XX":
+          description: Erro no processamento (Pedii registra mas não retenta)
+
+  conversation.handoff:
+    post:
+      summary: Lojista assumiu ou devolveu uma conversa
+      description: |
+        Disparado quando o lojista **assume** (`action: "start"`) ou **devolve ao agente**
+        (`action: "end"`) uma conversa pelo dashboard SaaS.
+
+        **Autenticação recebida:**
+        - Header `x-api-key: <AGENT_API_KEY>`
+
+        **Comportamento esperado ao receber:**
+
+        - `action: "start"` → registrar no estado que a conversa está em handoff.
+          Não enviar mensagens ao cliente até receber `action: "end"`.
+
+        - `action: "end"` → remover flag de handoff. Na próxima mensagem do cliente,
+          processar normalmente. Pode enviar mensagem opcional de retorno ao cliente.
+
+        > Este webhook é complemento da verificação ativa `GET /conversations`:
+        > garante notificação imediata, mas a verificação no início de cada turno
+        > é o mecanismo de garantia caso o webhook não seja entregue.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - event
+                - thread_id
+                - action
+                - organization_id
+                - timestamp
+              properties:
+                event:
+                  type: string
+                  enum: [conversation.handoff]
+                  example: "conversation.handoff"
+                thread_id:
+                  type: string
+                  description: Identificador composto da conversa "{instance_name}:{whatsapp}"
+                  example: "pedii_f988b66e:5511982122686"
+                action:
+                  type: string
+                  enum: [start, end]
+                  description: |
+                    "start" — lojista assumiu o atendimento.
+                    "end" — lojista devolveu ao agente.
+                  example: start
+                organization_id:
+                  type: string
+                  format: uuid
+                  example: "f988b66e-21e6-48d5-a90d-08f746600763"
+                activated_by_name:
+                  type: string
+                  nullable: true
+                  description: Nome do lojista que realizou a ação
+                  example: "Wilson Junior"
+                timestamp:
+                  type: string
+                  format: date-time
+                  example: "2026-04-04T14:30:00Z"
+            examples:
+              start:
+                summary: Lojista assumiu a conversa
+                value:
+                  event: conversation.handoff
+                  thread_id: "pedii_f988b66e:5511982122686"
+                  action: start
+                  organization_id: "f988b66e-21e6-48d5-a90d-08f746600763"
+                  activated_by_name: "Wilson Junior"
+                  timestamp: "2026-04-04T14:30:00Z"
+              end:
+                summary: Lojista devolveu ao agente
+                value:
+                  event: conversation.handoff
+                  thread_id: "pedii_f988b66e:5511982122686"
+                  action: end
+                  organization_id: "f988b66e-21e6-48d5-a90d-08f746600763"
+                  activated_by_name: "Wilson Junior"
+                  timestamp: "2026-04-04T14:55:00Z"
       responses:
         "200":
           description: Evento processado com sucesso pelo agente

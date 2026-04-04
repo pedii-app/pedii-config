@@ -54,6 +54,12 @@ O agente deve usar o `instance_name` para enviar mensagens via Evolution API.
    → Resolve organization_id a partir do nome da instância Evolution
    → Usado em todas as chamadas subsequentes
         ↓
+2.5. GET /conversations?thread_id=<instance_name>:<whatsapp_do_cliente>
+   → Verifica se a conversa está em handoff (lojista assumiu o atendimento)
+   → Se handoff_active: true → agente NÃO processa a mensagem, apenas aguarda
+     (o lojista está atendendo diretamente; o agente entra em modo silencioso)
+   → Se handoff_active: false → agente segue o fluxo normalmente
+        ↓
 3. GET /customers?organization_id=X&whatsapp=<numero_do_cliente>
    → O agente já sabe o whatsapp — consulta imediatamente sem pedir nada ao cliente
 
@@ -107,6 +113,49 @@ O agente deve usar o `instance_name` para enviar mensagens via Evolution API.
 ---
 
 ## Endpoints de saída (agente → Pedii)
+
+### `GET /conversations` — Verificar status de handoff (node `check_handoff`)
+
+**Chamado no início de cada turno de conversa**, antes de processar qualquer mensagem do cliente. O agente verifica se um lojista assumiu o atendimento direto da conversa.
+
+> Rota **exclusiva do agente** — somente `AGENT_API_KEY`. Não aceita JWT de usuário.
+
+| Parâmetro | Tipo | Obrigatório | Descrição |
+|---|---|---|---|
+| `thread_id` | string | ✅ | `"{instance_name}:{whatsapp_do_cliente}"` |
+
+**Resposta 200:**
+```json
+{
+  "thread_id": "pedii_f988b66e:5511982122686",
+  "handoff_active": true,
+  "activated_by_name": "Wilson Junior",
+  "started_at": "2026-04-04T14:30:00Z"
+}
+```
+
+| Campo | Descrição |
+|---|---|
+| `handoff_active` | `true` se um lojista assumiu o atendimento; `false` caso contrário |
+| `activated_by_name` | Nome do lojista que assumiu. `null` se `handoff_active: false` |
+| `started_at` | Timestamp de início do handoff. `null` se `handoff_active: false` |
+
+**Comportamento esperado do agente:**
+
+```
+SE handoff_active: true
+  → NÃO processar a mensagem do cliente
+  → NÃO enviar respostas via WhatsApp
+  → Agente entra em modo silencioso até o lojista devolver o controle
+  → (O webhook conversation.handoff com action="end" notifica quando retomar)
+
+SE handoff_active: false
+  → Processar normalmente — seguir fluxo do grafo
+```
+
+> **Implementação sugerida no grafo LangGraph:** criar um node `check_handoff` como primeiro node do grafo (antes de qualquer lógica de negócio). O node consulta esta rota e, se `handoff_active: true`, retorna um estado especial que faz o grafo encerrar o turno sem responder.
+
+---
 
 ### `GET /resolve-org` — Resolver organização pelo nome da instância
 
@@ -863,6 +912,57 @@ O agente deve usar este evento para comunicar ao cliente final as alterações r
 
 > O campo `order.order_items` reflete o estado final do pedido após todas as alterações.
 > Use `changes` para construir uma mensagem legível ao cliente descrevendo o que foi modificado.
+
+---
+
+## Webhooks recebidos pelo agente (Pedii → agente) — Handoff
+
+### Evento: `conversation.handoff`
+
+Disparado quando o lojista **assume ou devolve** uma conversa pelo dashboard SaaS.
+
+Este webhook complementa o node `check_handoff`: enquanto a verificação ativa garante que o agente não interfira (polling por turno), o webhook garante **notificação imediata** — o agente pode reagir em tempo real sem esperar o próximo turno.
+
+**Payload — lojista assume (`action: "start"`):**
+```json
+{
+  "event": "conversation.handoff",
+  "thread_id": "pedii_f988b66e:5511982122686",
+  "action": "start",
+  "organization_id": "f988b66e-21e6-48d5-a90d-08f746600763",
+  "activated_by_name": "Wilson Junior",
+  "timestamp": "2026-04-04T14:30:00Z"
+}
+```
+
+**Payload — lojista devolve ao agente (`action: "end"`):**
+```json
+{
+  "event": "conversation.handoff",
+  "thread_id": "pedii_f988b66e:5511982122686",
+  "action": "end",
+  "organization_id": "f988b66e-21e6-48d5-a90d-08f746600763",
+  "activated_by_name": "Wilson Junior",
+  "timestamp": "2026-04-04T14:55:00Z"
+}
+```
+
+| Campo | Descrição |
+|---|---|
+| `event` | Sempre `"conversation.handoff"` |
+| `thread_id` | Identificador composto `"{instance_name}:{whatsapp}"` da conversa |
+| `action` | `"start"` — lojista assumiu \| `"end"` — lojista devolveu ao agente |
+| `activated_by_name` | Nome do lojista que realizou a ação |
+| `timestamp` | ISO 8601 do momento da ação |
+
+**Comportamento esperado ao receber o webhook:**
+
+| `action` | O que o agente deve fazer |
+|---|---|
+| `"start"` | Registrar no estado da conversa que está em handoff. Não enviar mensagens ao cliente até receber `"end"`. |
+| `"end"` | Remover flag de handoff do estado. Na próxima mensagem do cliente, processar normalmente. Pode (opcional) enviar uma mensagem de retorno como *"Olá! Estou de volta para ajudá-lo 😊"*. |
+
+> O webhook pode falhar (timeout, indisponibilidade). A verificação ativa via `GET /conversations` no início de cada turno garante que o agente esteja sempre sincronizado mesmo se o webhook não for entregue.
 
 ---
 
