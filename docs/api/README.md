@@ -1017,35 +1017,6 @@ O Pedii persiste a mensagem do atendente em `handoff_messages` e o dashboard a e
    SystemMessage(content="[Atendente {activated_by_name}]: {content}")
 ```
 
-**Exemplo de implementação no grafo LangGraph (Python):**
-
-```python
-from langchain_core.messages import SystemMessage
-
-# Node que trata o webhook conversation.message
-async def handle_handoff_message(state: AgentState, config: RunnableConfig) -> AgentState:
-    webhook = config["configurable"]["webhook_payload"]
-
-    instance_name = webhook["thread_id"].split(":")[0]
-    whatsapp      = webhook["thread_id"].split(":")[1]
-
-    # 1. Envia ao cliente via Evolution API
-    await send_whatsapp_message(
-        instance=instance_name,
-        to=whatsapp,
-        text=webhook["content"],
-    )
-
-    # 2. Registra como SystemMessage — LLM tem memória, dashboard não duplica
-    return {
-        "messages": [
-            SystemMessage(
-                content=f"[Atendente {webhook['activated_by_name']}]: {webhook['content']}"
-            )
-        ]
-    }
-```
-
 **Por que isso funciona sem nenhuma mudança no banco ou no dashboard:**
 
 `get_conversation_messages` filtra:
