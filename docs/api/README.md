@@ -917,6 +917,21 @@ O agente deve usar este evento para comunicar ao cliente final as alterações r
 
 ## Webhooks recebidos pelo agente (Pedii → agente) — Handoff
 
+### Visão geral: o que acontece com cada mensagem durante o handoff
+
+Durante o handoff, dois tipos de mensagem trafegam pela conversa e exigem tratamentos distintos no LangGraph:
+
+| Origem | Como chega ao agente | Como armazenar no LangGraph | Aparece no dashboard |
+|---|---|---|---|
+| **Cliente** envia mensagem | Fluxo normal (Evolution → agente) | `HumanMessage` — comportamento padrão, sem mudança | ✅ Balão branco (esquerda) via LangGraph |
+| **Atendente** envia mensagem | Webhook `conversation.message` (Pedii → agente) | `SystemMessage` — **obrigatório**, ver detalhes abaixo | ✅ Balão âmbar (direita) via `handoff_messages` |
+
+**Regra de ouro:**
+- Mensagens do **cliente** durante handoff → `HumanMessage` como sempre. O agente só **não responde** (node `check_handoff` encerra o turno sem gerar resposta), mas a mensagem é gravada normalmente no checkpoint para que o agente tenha contexto ao retomar.
+- Mensagens do **atendente** durante handoff → `SystemMessage` no LangGraph. O Pedii já persiste essas mensagens na tabela `handoff_messages` e o dashboard as exibe a partir daí — o LangGraph só precisa guardar o contexto para o agente, não exibir.
+
+---
+
 ### Evento: `conversation.handoff`
 
 Disparado quando o lojista **assume ou devolve** uma conversa pelo dashboard SaaS.
@@ -968,7 +983,7 @@ Este webhook complementa o node `check_handoff`: enquanto a verificação ativa 
 
 ### Evento: `conversation.message`
 
-Disparado quando o **atendente humano** (em modo handoff) envia uma mensagem diretamente ao cliente pelo dashboard Conversas.
+Disparado quando o **atendente humano** envia uma mensagem ao cliente pelo dashboard Conversas durante o handoff.
 
 > **Garantia de handoff ativo:** a edge function valida que existe um `handoff_session` ativo antes de despachar este webhook — o agente nunca receberá `conversation.message` de conversas sem handoff ativo.
 
@@ -992,21 +1007,7 @@ Disparado quando o **atendente humano** (em modo handoff) envia uma mensagem dir
 | `activated_by_name` | Nome do atendente que enviou |
 | `timestamp` | ISO 8601 do envio |
 
----
-
-#### ⚠️ Implementação obrigatória: armazenar mensagens de handoff como `SystemMessage` no LangGraph
-
-**Por que `SystemMessage` e não `AIMessage`:**
-
-O Pedii persiste a mensagem do atendente em `handoff_messages` e o dashboard a exibe a partir dali. A função `get_conversation_messages` filtra o LangGraph exclusivamente por `HumanMessage | AIMessage` — logo, um `SystemMessage` é **naturalmente ignorado pela query** sem nenhum filtro extra. Ao mesmo tempo, o LLM **continua vendo o `SystemMessage`** como parte do contexto, garantindo memória completa da conversa.
-
-| Tipo de mensagem no LangGraph | Aparece no dashboard (query) | Agente tem memória |
-|---|---|---|
-| `AIMessage` ❌ | ✅ Sim — duplicado com `handoff_messages` | ✅ Sim |
-| `handoff_log` (campo separado) ⚠️ | ❌ Não | ⚠️ Só com injeção manual no prompt |
-| `SystemMessage` ✅ | ❌ Não — excluído naturalmente pela query | ✅ Sim — LLM vê o conteúdo |
-
-**O que o agente deve fazer ao receber `conversation.message`:**
+**O que o agente deve fazer:**
 
 ```
 1. Enviar o `content` ao cliente via Evolution API
@@ -1014,12 +1015,15 @@ O Pedii persiste a mensagem do atendente em `handoff_messages` e o dashboard a e
    whatsapp      = thread_id.split(':')[1]
 
 2. Adicionar ao estado como SystemMessage (NÃO AIMessage)
-   SystemMessage(content="[Atendente {activated_by_name}]: {content}")
+   Conteúdo sugerido: "[Atendente {activated_by_name}]: {content}"
 ```
 
-**Por que isso funciona sem nenhuma mudança no banco ou no dashboard:**
+#### ⚠️ Por que `SystemMessage` e não `AIMessage`
 
-`get_conversation_messages` filtra:
+O Pedii já persiste a mensagem do atendente em `handoff_messages` e o dashboard a exibe a partir daí (balão âmbar). Se o agente armazenar como `AIMessage` no LangGraph, a mensagem aparecerá **duas vezes** no dashboard.
+
+A função `get_conversation_messages` filtra o LangGraph exclusivamente por `HumanMessage | AIMessage`:
+
 ```sql
 WHERE (
   msg -> 'id' @> '["langchain_core","messages","HumanMessage"]'
@@ -1027,7 +1031,23 @@ WHERE (
 )
 ```
 
-`SystemMessage` tem id `["langchain_core","messages","SystemMessage"]` — cai fora do filtro automaticamente. O dashboard exibe a mensagem âmbar exclusivamente via `handoff_messages`. O LLM a vê em `messages[]` como contexto. Zero duplicação, zero gambiarra, memória preservada.
+`SystemMessage` tem id `["langchain_core","messages","SystemMessage"]` — é **ignorado automaticamente pela query** sem nenhum filtro extra. Ao mesmo tempo, o LLM continua vendo o `SystemMessage` como parte do contexto de `messages[]`, então o agente tem **memória completa** de tudo que o atendente disse ao retomar a conversa.
+
+| Tipo no LangGraph | Duplica no dashboard | Agente tem memória |
+|---|---|---|
+| `AIMessage` ❌ | ✅ Sim — aparece duas vezes | ✅ Sim |
+| `SystemMessage` ✅ | ❌ Não — excluído naturalmente | ✅ Sim |
+
+#### Mensagens do cliente durante o handoff
+
+Essas **não precisam de nenhum tratamento especial**. Quando o cliente envia uma mensagem enquanto o handoff está ativo, o fluxo é:
+
+1. Mensagem chega ao agente pelo canal normal (Evolution API)
+2. É adicionada ao estado como `HumanMessage` — comportamento padrão do LangGraph
+3. O node `check_handoff` detecta `handoff_active: true` e encerra o turno **sem gerar resposta**
+4. A `HumanMessage` fica gravada no checkpoint — o agente terá contexto completo ao retomar
+
+O dashboard exibe essas mensagens normalmente (balão branco, lado esquerdo) via LangGraph, sem nenhuma lógica adicional.
 
 ---
 
