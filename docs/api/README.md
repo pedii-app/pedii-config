@@ -970,11 +970,7 @@ Este webhook complementa o node `check_handoff`: enquanto a verificação ativa 
 
 Disparado quando o **atendente humano** (em modo handoff) envia uma mensagem diretamente ao cliente pelo dashboard Conversas.
 
-O agente deve:
-1. Enviar o `content` ao cliente via Evolution API (usando `instance_name` extraído do `thread_id`)
-2. Persistir a mensagem no LangGraph como `AIMessage` para manter o histórico da conversa
-
-> **Extração do `instance_name`:** o `thread_id` tem formato `"{instance_name}:{whatsapp}"`. Extrair com `thread_id.split(':')[0]` e `thread_id.split(':')[1]`.
+> **Garantia de handoff ativo:** a edge function valida que existe um `handoff_session` ativo antes de despachar este webhook — o agente nunca receberá `conversation.message` de conversas sem handoff ativo.
 
 **Payload:**
 ```json
@@ -996,9 +992,81 @@ O agente deve:
 | `activated_by_name` | Nome do atendente que enviou |
 | `timestamp` | ISO 8601 do envio |
 
-> **Garantia de handoff ativo:** a edge function valida que existe um `handoff_session` ativo antes de despachar este webhook — o agente não receberá `conversation.message` de conversas sem handoff ativo.
+---
 
-> **Persistência no LangGraph:** ao gravar como `AIMessage`, a mensagem aparecerá automaticamente no dashboard via Realtime (subscription em `checkpoint_blobs`).
+#### ⚠️ Implementação obrigatória: NÃO inserir mensagens de handoff no canal `messages[]` do LangGraph
+
+**Contexto:** o Pedii persiste todas as mensagens enviadas pelo atendente diretamente na tabela `handoff_messages` do banco. O dashboard constrói o histórico mesclando `messages[]` do LangGraph + `handoff_messages`. Se o agente adicionar essas mensagens **também** ao canal `messages[]` do LangGraph, elas aparecerão duplicadas no chat do dashboard.
+
+**O que o agente deve fazer ao receber `conversation.message`:**
+
+```
+1. Enviar o `content` ao cliente via Evolution API
+   instance_name = thread_id.split(':')[0]
+   whatsapp      = thread_id.split(':')[1]
+
+2. Registrar no estado do grafo em um campo SEPARADO de messages[]
+   Ex: state["handoff_log"].append({ content, by: activated_by_name, at: timestamp })
+
+3. NÃO criar AIMessage, NÃO chamar add_messages(), NÃO atualizar o canal messages[]
+```
+
+**Por que usar `handoff_log` (ou similar) em vez de `messages[]`:**
+
+| Aspecto | `messages[]` ❌ | `handoff_log` ✅ |
+|---|---|---|
+| Aparece no dashboard | Duplicado (já está em `handoff_messages`) | Não aparece (não polui) |
+| Contexto para o agente | Sim, mas misturado com a conversa | Sim, campo dedicado |
+| Histórico limpo | Não | Sim |
+| Retomada após handoff | Agente "vê" mensagem duas vezes | Agente vê apenas em `handoff_log` |
+
+**Exemplo de implementação no grafo LangGraph (Python):**
+
+```python
+# State definition
+class AgentState(TypedDict):
+    messages: Annotated[list, add_messages]   # canal principal — NÃO recebe msgs de handoff
+    handoff_log: list[dict]                   # contexto do handoff — não vai para messages[]
+    # ... outros campos
+
+# Node que trata o webhook conversation.message
+async def handle_handoff_message(state: AgentState, config: RunnableConfig) -> AgentState:
+    webhook = config["configurable"]["webhook_payload"]
+
+    # 1. Envia ao cliente via Evolution API
+    await send_whatsapp_message(
+        instance=webhook["thread_id"].split(":")[0],
+        to=webhook["thread_id"].split(":")[1],
+        text=webhook["content"],
+    )
+
+    # 2. Registra no handoff_log (NÃO em messages[])
+    log_entry = {
+        "content": webhook["content"],
+        "sent_by": webhook["activated_by_name"],
+        "at": webhook["timestamp"],
+    }
+
+    return {
+        # messages NÃO é atualizado — zero eco no dashboard
+        "handoff_log": state.get("handoff_log", []) + [log_entry],
+    }
+```
+
+**Como usar o `handoff_log` na retomada:**
+
+Quando o handoff termina e o cliente envia a próxima mensagem, o agente pode incluir o histórico do handoff como contexto no prompt do sistema:
+
+```python
+# No node de processamento normal, após handoff
+if state.get("handoff_log"):
+    handoff_summary = "\n".join(
+        f"- Atendente disse: \"{entry['content']}\" ({entry['at']})"
+        for entry in state["handoff_log"]
+    )
+    # Injetar no system prompt como contexto adicional
+    system_context = f"Durante o handoff, o atendente enviou:\n{handoff_summary}"
+```
 
 ---
 
