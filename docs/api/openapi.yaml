@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Pedii Agent API
-  version: 3.11.0
+  version: 3.12.0
   description: |
     APIs utilizadas pelo agente de vendas WhatsApp do Pedii.
 
@@ -2024,16 +2024,17 @@ webhooks:
         **O agente deve:**
         1. Extrair `instance_name` e `whatsapp` do `thread_id` (`"{instance_name}:{whatsapp}"`)
         2. Enviar `content` ao cliente via Evolution API usando o `instance_name`
-        3. Registrar no estado do grafo em campo SEPARADO de `messages[]` (ex: `handoff_log`)
+        3. Adicionar ao estado como `SystemMessage` (NÃO `AIMessage`)
 
-        > **⚠️ NÃO inserir no canal `messages[]` do LangGraph.**
-        > O Pedii persiste a mensagem diretamente em `handoff_messages` e o dashboard já a
-        > exibe a partir daí. Se o agente também adicionar ao canal `messages[]`, a mensagem
-        > aparecerá duplicada no chat (uma vez âmbar pelo dashboard, uma vez verde pelo LangGraph).
+        > **⚠️ Usar `SystemMessage`, não `AIMessage`.**
         >
-        > Use um campo de estado dedicado (ex: `handoff_log: list[dict]`) para que o agente
-        > tenha contexto sobre o que foi dito durante o handoff sem poluir o histórico principal.
-        > Ver documentação completa e exemplo de implementação em `README.md`.
+        > `get_conversation_messages` filtra o LangGraph por `HumanMessage | AIMessage` apenas.
+        > Um `SystemMessage` é excluído naturalmente pela query — não aparece no dashboard —
+        > enquanto o LLM continua vendo o conteúdo como contexto, preservando a memória.
+        >
+        > Se o agente usar `AIMessage`, a mensagem aparecerá duplicada: uma vez em âmbar
+        > (via `handoff_messages`, persiste no banco pelo dashboard) e uma vez em verde
+        > (via LangGraph). Ver `README.md` para exemplo completo de implementação.
 
         > A edge function valida que o handoff está ativo antes de despachar este evento —
         > o agente nunca receberá `conversation.message` de conversas sem handoff ativo.

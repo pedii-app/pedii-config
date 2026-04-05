@@ -994,9 +994,17 @@ Disparado quando o **atendente humano** (em modo handoff) envia uma mensagem dir
 
 ---
 
-#### ⚠️ Implementação obrigatória: NÃO inserir mensagens de handoff no canal `messages[]` do LangGraph
+#### ⚠️ Implementação obrigatória: armazenar mensagens de handoff como `SystemMessage` no LangGraph
 
-**Contexto:** o Pedii persiste todas as mensagens enviadas pelo atendente diretamente na tabela `handoff_messages` do banco. O dashboard constrói o histórico mesclando `messages[]` do LangGraph + `handoff_messages`. Se o agente adicionar essas mensagens **também** ao canal `messages[]` do LangGraph, elas aparecerão duplicadas no chat do dashboard.
+**Por que `SystemMessage` e não `AIMessage`:**
+
+O Pedii persiste a mensagem do atendente em `handoff_messages` e o dashboard a exibe a partir dali. A função `get_conversation_messages` filtra o LangGraph exclusivamente por `HumanMessage | AIMessage` — logo, um `SystemMessage` é **naturalmente ignorado pela query** sem nenhum filtro extra. Ao mesmo tempo, o LLM **continua vendo o `SystemMessage`** como parte do contexto, garantindo memória completa da conversa.
+
+| Tipo de mensagem no LangGraph | Aparece no dashboard (query) | Agente tem memória |
+|---|---|---|
+| `AIMessage` ❌ | ✅ Sim — duplicado com `handoff_messages` | ✅ Sim |
+| `handoff_log` (campo separado) ⚠️ | ❌ Não | ⚠️ Só com injeção manual no prompt |
+| `SystemMessage` ✅ | ❌ Não — excluído naturalmente pela query | ✅ Sim — LLM vê o conteúdo |
 
 **O que o agente deve fazer ao receber `conversation.message`:**
 
@@ -1005,68 +1013,50 @@ Disparado quando o **atendente humano** (em modo handoff) envia uma mensagem dir
    instance_name = thread_id.split(':')[0]
    whatsapp      = thread_id.split(':')[1]
 
-2. Registrar no estado do grafo em um campo SEPARADO de messages[]
-   Ex: state["handoff_log"].append({ content, by: activated_by_name, at: timestamp })
-
-3. NÃO criar AIMessage, NÃO chamar add_messages(), NÃO atualizar o canal messages[]
+2. Adicionar ao estado como SystemMessage (NÃO AIMessage)
+   SystemMessage(content="[Atendente {activated_by_name}]: {content}")
 ```
-
-**Por que usar `handoff_log` (ou similar) em vez de `messages[]`:**
-
-| Aspecto | `messages[]` ❌ | `handoff_log` ✅ |
-|---|---|---|
-| Aparece no dashboard | Duplicado (já está em `handoff_messages`) | Não aparece (não polui) |
-| Contexto para o agente | Sim, mas misturado com a conversa | Sim, campo dedicado |
-| Histórico limpo | Não | Sim |
-| Retomada após handoff | Agente "vê" mensagem duas vezes | Agente vê apenas em `handoff_log` |
 
 **Exemplo de implementação no grafo LangGraph (Python):**
 
 ```python
-# State definition
-class AgentState(TypedDict):
-    messages: Annotated[list, add_messages]   # canal principal — NÃO recebe msgs de handoff
-    handoff_log: list[dict]                   # contexto do handoff — não vai para messages[]
-    # ... outros campos
+from langchain_core.messages import SystemMessage
 
 # Node que trata o webhook conversation.message
 async def handle_handoff_message(state: AgentState, config: RunnableConfig) -> AgentState:
     webhook = config["configurable"]["webhook_payload"]
 
+    instance_name = webhook["thread_id"].split(":")[0]
+    whatsapp      = webhook["thread_id"].split(":")[1]
+
     # 1. Envia ao cliente via Evolution API
     await send_whatsapp_message(
-        instance=webhook["thread_id"].split(":")[0],
-        to=webhook["thread_id"].split(":")[1],
+        instance=instance_name,
+        to=whatsapp,
         text=webhook["content"],
     )
 
-    # 2. Registra no handoff_log (NÃO em messages[])
-    log_entry = {
-        "content": webhook["content"],
-        "sent_by": webhook["activated_by_name"],
-        "at": webhook["timestamp"],
-    }
-
+    # 2. Registra como SystemMessage — LLM tem memória, dashboard não duplica
     return {
-        # messages NÃO é atualizado — zero eco no dashboard
-        "handoff_log": state.get("handoff_log", []) + [log_entry],
+        "messages": [
+            SystemMessage(
+                content=f"[Atendente {webhook['activated_by_name']}]: {webhook['content']}"
+            )
+        ]
     }
 ```
 
-**Como usar o `handoff_log` na retomada:**
+**Por que isso funciona sem nenhuma mudança no banco ou no dashboard:**
 
-Quando o handoff termina e o cliente envia a próxima mensagem, o agente pode incluir o histórico do handoff como contexto no prompt do sistema:
-
-```python
-# No node de processamento normal, após handoff
-if state.get("handoff_log"):
-    handoff_summary = "\n".join(
-        f"- Atendente disse: \"{entry['content']}\" ({entry['at']})"
-        for entry in state["handoff_log"]
-    )
-    # Injetar no system prompt como contexto adicional
-    system_context = f"Durante o handoff, o atendente enviou:\n{handoff_summary}"
+`get_conversation_messages` filtra:
+```sql
+WHERE (
+  msg -> 'id' @> '["langchain_core","messages","HumanMessage"]'
+  OR msg -> 'id' @> '["langchain_core","messages","AIMessage"]'
+)
 ```
+
+`SystemMessage` tem id `["langchain_core","messages","SystemMessage"]` — cai fora do filtro automaticamente. O dashboard exibe a mensagem âmbar exclusivamente via `handoff_messages`. O LLM a vê em `messages[]` como contexto. Zero duplicação, zero gambiarra, memória preservada.
 
 ---
 
