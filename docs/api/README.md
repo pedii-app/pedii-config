@@ -923,12 +923,14 @@ Durante o handoff, dois tipos de mensagem trafegam pela conversa e exigem tratam
 
 | Origem | Como chega ao agente | Como armazenar no LangGraph | Aparece no dashboard |
 |---|---|---|---|
-| **Cliente** envia mensagem | Fluxo normal (Evolution → agente) | `HumanMessage` — comportamento padrão, sem mudança | ✅ Balão branco (esquerda) via LangGraph |
-| **Atendente** envia mensagem | Webhook `conversation.message` (Pedii → agente) | `SystemMessage` — **obrigatório**, ver detalhes abaixo | ✅ Balão âmbar (direita) via `handoff_messages` |
+| **Cliente** envia mensagem | Fluxo normal (Evolution → agente) | `HumanMessage` — comportamento padrão, sem mudança | ✅ Balão branco (esquerda) |
+| **Atendente** envia mensagem | Webhook `conversation.message` (Pedii → agente) | `AIMessage` com `additional_kwargs: { pedii_handoff_by: "<nome>" }` | ✅ Balão âmbar (direita) |
+
+O LangGraph é a **única fonte da verdade** para o histórico de mensagens. O campo `pedii_handoff_by` no `additional_kwargs` é o que diferencia uma mensagem do atendente de uma resposta do agente IA no dashboard.
 
 **Regra de ouro:**
-- Mensagens do **cliente** durante handoff → `HumanMessage` como sempre. O agente só **não responde** (node `check_handoff` encerra o turno sem gerar resposta), mas a mensagem é gravada normalmente no checkpoint para que o agente tenha contexto ao retomar.
-- Mensagens do **atendente** durante handoff → `SystemMessage` no LangGraph. O Pedii já persiste essas mensagens na tabela `handoff_messages` e o dashboard as exibe a partir daí — o LangGraph só precisa guardar o contexto para o agente, não exibir.
+- Mensagens do **cliente** durante handoff → `HumanMessage` como sempre. O agente só **não responde** (node `check_handoff` encerra o turno sem gerar resposta), mas a mensagem é gravada normalmente no checkpoint.
+- Mensagens do **atendente** durante handoff → `AIMessage` com `additional_kwargs: { pedii_handoff_by: "<nome>" }`. O LangGraph acumula todas as mensagens com `add_messages` — elas jamais somem ao retomar com o mesmo `thread_id`.
 
 ---
 
@@ -1014,29 +1016,21 @@ Disparado quando o **atendente humano** envia uma mensagem ao cliente pelo dashb
    instance_name = thread_id.split(':')[0]
    whatsapp      = thread_id.split(':')[1]
 
-2. Adicionar ao estado como SystemMessage (NÃO AIMessage)
-   Conteúdo sugerido: "[Atendente {activated_by_name}]: {content}"
+2. Adicionar ao estado como AIMessage com additional_kwargs
+   AIMessage(
+     content = content,
+     additional_kwargs = { "pedii_handoff_by": activated_by_name }
+   )
 ```
 
-#### ⚠️ Por que `SystemMessage` e não `AIMessage`
+#### Por que `AIMessage` com `additional_kwargs` é a abordagem correta
 
-O Pedii já persiste a mensagem do atendente em `handoff_messages` e o dashboard a exibe a partir daí (balão âmbar). Se o agente armazenar como `AIMessage` no LangGraph, a mensagem aparecerá **duas vezes** no dashboard.
+O LangGraph é a **única fonte da verdade** para o histórico de mensagens no Pedii. O dashboard lê exclusivamente do LangGraph via `get_conversation_messages`.
 
-A função `get_conversation_messages` filtra o LangGraph exclusivamente por `HumanMessage | AIMessage`:
+O campo `additional_kwargs.pedii_handoff_by` sinaliza ao dashboard que a mensagem foi enviada por um atendente humano (não pelo agente IA), permitindo diferenciação visual — o dashboard exibe em balão âmbar com o nome do atendente. Sem esse campo, a mensagem aparece como resposta normal do agente (balão verde).
 
-```sql
-WHERE (
-  msg -> 'id' @> '["langchain_core","messages","HumanMessage"]'
-  OR msg -> 'id' @> '["langchain_core","messages","AIMessage"]'
-)
-```
-
-`SystemMessage` tem id `["langchain_core","messages","SystemMessage"]` — é **ignorado automaticamente pela query** sem nenhum filtro extra. Ao mesmo tempo, o LLM continua vendo o `SystemMessage` como parte do contexto de `messages[]`, então o agente tem **memória completa** de tudo que o atendente disse ao retomar a conversa.
-
-| Tipo no LangGraph | Duplica no dashboard | Agente tem memória |
-|---|---|---|
-| `AIMessage` ❌ | ✅ Sim — aparece duas vezes | ✅ Sim |
-| `SystemMessage` ✅ | ❌ Não — excluído naturalmente | ✅ Sim |
+**Por que não sumir ao retomar:**
+O LangGraph usa `add_messages` como reducer para o canal `messages[]`, que é acumulativo. Cada novo checkpoint contém **todas as mensagens anteriores** — incluindo os `AIMessage` do handoff. Ao retomar com o mesmo `thread_id`, o agente carrega o checkpoint mais recente com o histórico completo. As mensagens do atendente nunca são perdidas.
 
 #### Mensagens do cliente durante o handoff
 

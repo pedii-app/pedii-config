@@ -2024,17 +2024,15 @@ webhooks:
         **O agente deve:**
         1. Extrair `instance_name` e `whatsapp` do `thread_id` (`"{instance_name}:{whatsapp}"`)
         2. Enviar `content` ao cliente via Evolution API usando o `instance_name`
-        3. Adicionar ao estado como `SystemMessage` (NÃO `AIMessage`)
+        3. Persistir no LangGraph como `AIMessage` com `additional_kwargs: { "pedii_handoff_by": activated_by_name }`
 
-        > **⚠️ Usar `SystemMessage`, não `AIMessage`.**
-        >
-        > `get_conversation_messages` filtra o LangGraph por `HumanMessage | AIMessage` apenas.
-        > Um `SystemMessage` é excluído naturalmente pela query — não aparece no dashboard —
-        > enquanto o LLM continua vendo o conteúdo como contexto, preservando a memória.
-        >
-        > Se o agente usar `AIMessage`, a mensagem aparecerá duplicada: uma vez em âmbar
-        > (via `handoff_messages`, persiste no banco pelo dashboard) e uma vez em verde
-        > (via LangGraph). Ver `README.md` para exemplo completo de implementação.
+        O LangGraph é a única fonte da verdade para mensagens. O campo `pedii_handoff_by`
+        no `additional_kwargs` instrui o dashboard a exibir o balão em âmbar com o nome
+        do atendente, diferenciando de respostas do agente IA (balão verde).
+
+        O reducer `add_messages` do LangGraph é acumulativo: cada checkpoint inclui todas
+        as mensagens anteriores. Mensagens do atendente nunca somem ao retomar com o mesmo
+        `thread_id`. Ver `README.md` para a lógica completa.
 
         > A edge function valida que o handoff está ativo antes de despachar este evento —
         > o agente nunca receberá `conversation.message` de conversas sem handoff ativo.
