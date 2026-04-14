@@ -1089,6 +1089,156 @@ A validação de estoque é aplicada no INSERT (trigger `BEFORE INSERT`) e na AP
 
 ---
 
+---
+
+## Campanhas Promocionais — `POST /campaigns` e `GET /campaigns`
+
+O módulo de campanhas permite ao lojista disparar mensagens promocionais ativas para a base de clientes via WhatsApp. O **agente é o único canal de envio** — mantendo todo o histórico no LangGraph.
+
+---
+
+### Visão geral do fluxo
+
+```
+Dashboard → POST /campaigns action=dispatch
+          → edge function itera campaign_recipients
+          → webhook "campaign.send" para cada destinatário
+                    ↓
+               Agente (GCP)
+               ├─ envia imagem+texto via Evolution API
+               ├─ persiste AIMessage no LangGraph com additional_kwargs.pedii_campaign_*
+               └─ callback POST /campaigns action=recipient_status (sent | failed)
+
+Evolution API → messages.update → Agente
+               → GET /campaigns?waid=<id>     # descobre campaign_recipient_id
+               → POST /campaigns action=recipient_status (delivered | read)
+```
+
+---
+
+### Webhook: `campaign.send`
+
+Disparado pelo Pedii ao agente para cada destinatário. Autenticação: header `x-api-key: <AGENT_API_KEY>`.
+
+**Payload:**
+```json
+{
+  "event": "campaign.send",
+  "organization_id": "<uuid>",
+  "campaign_id": "<uuid>",
+  "campaign_recipient_id": "<uuid>",
+  "thread_id": "pedii_f988b66e:5511982122686",
+  "product_id": "<uuid>",
+  "product_name": "Dorflex 20cp",
+  "message_text": "Promoção Dorflex hoje: R$ 8,90! Responda SIM para comprar.",
+  "image_url": "https://.../signed-url",
+  "instance_name": "pedii_f988b66e",
+  "timestamp": "2026-04-14T10:00:00Z"
+}
+```
+
+> `image_url` é uma signed URL válida por 1 hora. O agente deve baixar e repassar à Evolution API como mídia antes de enviar.
+
+---
+
+### O que o agente deve fazer ao receber `campaign.send`
+
+1. **Enviar a mensagem** via Evolution API usando `instance_name` + destinatário = parte após `:` no `thread_id`.
+   - Incluir a imagem (`image_url`) se presente.
+   - Salvar o `waid` (WhatsApp message ID) retornado pela Evolution API.
+
+2. **Persistir no LangGraph** como `AIMessage` no thread `thread_id`:
+   ```json
+   {
+     "type": "AIMessage",
+     "content": "<message_text>",
+     "additional_kwargs": {
+       "pedii_campaign_id": "<uuid>",
+       "pedii_campaign_product_id": "<uuid>",
+       "pedii_campaign_product_name": "Dorflex 20cp"
+     }
+   }
+   ```
+   Isso garante que o contexto do produto promovido fique no histórico do thread. Quando o cliente responder "quero comprar", o agente vê no estado do LangGraph qual `product_id` foi promovido e faz o match **determinístico** — sem fuzzy search por nome.
+
+3. **Callback imediato** ao Pedii:
+   ```
+   POST /campaigns
+   Authorization: Bearer <AGENT_API_KEY>
+   {
+     "action": "recipient_status",
+     "campaign_recipient_id": "<uuid>",
+     "status": "sent",
+     "whatsapp_message_id": "<waid>"
+   }
+   ```
+   Em caso de falha na Evolution API:
+   ```json
+   { "action": "recipient_status", "campaign_recipient_id": "<uuid>", "status": "failed", "error_message": "..." }
+   ```
+
+---
+
+### Rastreamento de entrega e leitura (`messages.update`)
+
+Quando a Evolution API disparar `messages.update` com status `DELIVERY_ACK` (entregue) ou `READ` (lido):
+
+1. **Consultar** `GET /campaigns?waid=<waid>` (auth: `Bearer <AGENT_API_KEY>`).
+   - Retorna `{ campaign_recipient_id, campaign_id, status }` ou `{ campaign_recipient_id: null }` se não for mensagem de campanha.
+
+2. **Se `campaign_recipient_id` não for null**, fazer callback:
+   ```json
+   {
+     "action": "recipient_status",
+     "campaign_recipient_id": "<uuid>",
+     "status": "delivered"
+   }
+   ```
+   ou `"status": "read"` para `READ`.
+
+O Pedii registra `delivered_at` / `read_at` e o dashboard exibe os totalizadores em tempo real.
+
+---
+
+### Callback `POST /campaigns action=recipient_status`
+
+| Campo | Tipo | Obrigatório | Descrição |
+|---|---|---|---|
+| `action` | string | sim | `"recipient_status"` |
+| `campaign_recipient_id` | uuid | sim | ID do destinatário |
+| `status` | string | sim | `sent` \| `delivered` \| `read` \| `failed` |
+| `whatsapp_message_id` | string | não | waid retornado pela Evolution API (enviar apenas no status `sent`) |
+| `error_message` | string | não | Mensagem de erro (apenas se `status = failed`) |
+
+---
+
+### Consulta de metadados `GET /campaigns?campaign_id=X`
+
+Retorna dados completos da campanha com signed URL da imagem. Útil se o agente precisar reprocessar.
+
+```json
+{
+  "id": "<uuid>",
+  "name": "Promoção Dorflex",
+  "message_text": "...",
+  "image_url": "https://.../signed-url",
+  "product_id": "<uuid>",
+  "products": { "id": "<uuid>", "descricao": "Dorflex 20cp" }
+}
+```
+
+---
+
+### Regra obrigatória de histórico
+
+O agente **não pode** emitir `RemoveMessage` no canal `messages` do LangGraph. O trim/sanitize deve ser feito apenas em memória antes do call ao LLM, **sem escrever de volta ao estado**.
+
+Caso contrário, as `AIMessages` com `pedii_campaign_product_id` serão permanentemente apagadas do checkpoint — e o match determinístico de produto falhará quando o cliente responder.
+
+> Contexto: incidente identificado em 2026-04-14 onde os nodes `trim-history.before_model` e `sanitize-history.before_model` estavam emitindo `RemoveMessage`, apagando mensagens de campanha e de atendimento do histórico.
+
+---
+
 ## Referência OpenAPI
 
 O arquivo `openapi.yaml` neste diretório segue o padrão OpenAPI 3.1 e pode ser importado

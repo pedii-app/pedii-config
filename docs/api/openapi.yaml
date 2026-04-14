@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Pedii Agent API
-  version: 3.12.0
+  version: 3.14.0
   description: |
     APIs utilizadas pelo agente de vendas WhatsApp do Pedii.
 
@@ -2289,3 +2289,143 @@ webhooks:
           description: Evento processado com sucesso pelo agente
         "4XX":
           description: Erro no processamento (Pedii registra mas não retenta)
+
+  /campaigns:
+    get:
+      summary: Consultar metadados de campanha ou buscar por waid
+      description: |
+        Usado pelo agente para:
+        - Obter metadados completos de uma campanha (product_id, image_url assinada, message_text)
+        - Descobrir o campaign_recipient_id a partir de um WhatsApp message ID (waid),
+          permitindo registrar receipts de entrega e leitura vindos da Evolution API.
+      security:
+        - AgentApiKey: []
+      parameters:
+        - name: campaign_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: ID da campanha. Use para obter metadados.
+        - name: waid
+          in: query
+          schema:
+            type: string
+          description: WhatsApp message ID retornado pela Evolution API. Use para correlacionar receipts.
+      responses:
+        "200":
+          description: Dados retornados com sucesso
+          content:
+            application/json:
+              examples:
+                campaign_metadata:
+                  summary: Metadados da campanha
+                  value:
+                    id: "cmp-uuid"
+                    name: "Promoção Dorflex"
+                    message_text: "Promoção Dorflex hoje: R$ 8,90!"
+                    image_url: "https://storage.supabase.co/.../signed-url"
+                    product_id: "prod-uuid"
+                    products:
+                      id: "prod-uuid"
+                      descricao: "Dorflex 20cp"
+                waid_lookup:
+                  summary: Resultado de lookup por waid
+                  value:
+                    campaign_recipient_id: "rcpt-uuid"
+                    campaign_id: "cmp-uuid"
+                    status: "sent"
+                waid_not_found:
+                  summary: Mensagem não pertence a campanha
+                  value:
+                    campaign_recipient_id: null
+        "401":
+          description: API key inválida
+        "404":
+          description: Campanha não encontrada
+
+    post:
+      summary: Callback de status de destinatário (agente → Pedii)
+      description: |
+        O agente usa este endpoint para notificar o Pedii sobre o status de envio,
+        entrega ou leitura de uma mensagem de campanha.
+
+        **Webhook recebido pelo agente (`campaign.send`):**
+        ```json
+        {
+          "event": "campaign.send",
+          "organization_id": "<uuid>",
+          "campaign_id": "<uuid>",
+          "campaign_recipient_id": "<uuid>",
+          "thread_id": "pedii_f988b66e:5511982122686",
+          "product_id": "<uuid>",
+          "product_name": "Dorflex 20cp",
+          "message_text": "Promoção Dorflex hoje: R$ 8,90!",
+          "image_url": "https://.../signed-url",
+          "instance_name": "pedii_f988b66e",
+          "timestamp": "2026-04-14T10:00:00Z"
+        }
+        ```
+
+        **Persistência no LangGraph:** salvar como `AIMessage` com `additional_kwargs`:
+        `{ pedii_campaign_id, pedii_campaign_product_id, pedii_campaign_product_name }`
+      security:
+        - AgentApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action, campaign_recipient_id, status]
+              properties:
+                action:
+                  type: string
+                  enum: [recipient_status]
+                campaign_recipient_id:
+                  type: string
+                  format: uuid
+                status:
+                  type: string
+                  enum: [sent, delivered, read, failed]
+                whatsapp_message_id:
+                  type: string
+                  description: waid da Evolution API. Enviar apenas no status "sent".
+                error_message:
+                  type: string
+                  description: Apenas para status "failed".
+            examples:
+              sent:
+                value:
+                  action: recipient_status
+                  campaign_recipient_id: "rcpt-uuid"
+                  status: sent
+                  whatsapp_message_id: "3EB0123456789"
+              delivered:
+                value:
+                  action: recipient_status
+                  campaign_recipient_id: "rcpt-uuid"
+                  status: delivered
+              read:
+                value:
+                  action: recipient_status
+                  campaign_recipient_id: "rcpt-uuid"
+                  status: read
+              failed:
+                value:
+                  action: recipient_status
+                  campaign_recipient_id: "rcpt-uuid"
+                  status: failed
+                  error_message: "WhatsApp number not registered"
+      responses:
+        "200":
+          description: Status atualizado com sucesso
+          content:
+            application/json:
+              example:
+                ok: true
+                status: sent
+        "400":
+          description: Parâmetros inválidos
+        "401":
+          description: API key inválida
