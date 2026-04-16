@@ -71,6 +71,26 @@ components:
           example: "pedii_f988b66e"
 
     # ─────────────────────────────────────────────────────────────────────────
+    # Payment
+    # ─────────────────────────────────────────────────────────────────────────
+    PaymentMethodType:
+      type: string
+      nullable: true
+      enum: [credit_card, debit_card, pix, cash]
+      description: Forma de pagamento escolhida pelo cliente
+      example: pix
+
+    PaymentMethodItem:
+      type: object
+      properties:
+        value:
+          $ref: '#/components/schemas/PaymentMethodType'
+        label:
+          type: string
+          description: Label legível para apresentação ao cliente
+          example: Pix
+
+    # ─────────────────────────────────────────────────────────────────────────
     # Customer
     # ─────────────────────────────────────────────────────────────────────────
     CustomerAddress:
@@ -300,6 +320,8 @@ components:
             Calculado automaticamente no POST /orders com base em shipping_distance_km
             e nos campos tempo_entrega_min/max da loja. null se fora do raio.
           example: 35
+        payment_method:
+          $ref: '#/components/schemas/PaymentMethodType'
         agent_created:
           type: boolean
           description: True se o pedido foi criado pelo agente via API
@@ -1260,6 +1282,52 @@ paths:
           description: Loja não encontrada
 
   # ──────────────────────────────────────────────────────────────────────────
+  # PAYMENT METHODS
+  # ──────────────────────────────────────────────────────────────────────────
+  /payment-methods:
+    get:
+      operationId: listarFormasPagamento
+      summary: Listar formas de pagamento aceitas pela organização
+      description: |
+        Retorna as formas de pagamento que a organização aceita.
+        O agente deve chamar este endpoint após calcular o frete e antes de criar o pedido,
+        apresentar as opções ao cliente e enviar o `value` escolhido como `payment_method`
+        no `POST /orders`.
+      tags: [Pedidos]
+      security:
+        - AgentApiKey: []
+        - BearerAuth: []
+      parameters:
+        - name: organization_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: ID da organização
+      responses:
+        "200":
+          description: Formas de pagamento aceitas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  organization_id:
+                    type: string
+                    format: uuid
+                  accepted_payment_methods:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PaymentMethodItem'
+        "400":
+          description: organization_id não informado
+        "401":
+          description: Token inválido ou ausente
+        "404":
+          description: Organização não encontrada
+
+  # ──────────────────────────────────────────────────────────────────────────
   # CALCULATE FREIGHT
   # ──────────────────────────────────────────────────────────────────────────
   /calculate-freight:
@@ -1585,6 +1653,12 @@ paths:
                 shipping_within_radius:
                   type: boolean
                   nullable: true
+                payment_method:
+                  $ref: '#/components/schemas/PaymentMethodType'
+                  description: |
+                    Forma de pagamento escolhida pelo cliente. Deve ser um dos valores
+                    retornados por GET /payment-methods para esta organização.
+                    Opcional — pedidos sem payment_method são aceitos para retrocompatibilidade.
                 items:
                   type: array
                   description: Itens do pedido (opcional na criação, pode ser adicionado via PATCH)

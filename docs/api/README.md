@@ -87,14 +87,19 @@ O agente deve usar o `instance_name` para enviar mensagens via Evolution API.
         ↓
 6. POST /calculate-freight { loja_id, cliente_id, address_id? }
    → Confirma raio, calcula frete e prazo
-   → Retorna address_id resolvido (usar no step 8)
+   → Retorna address_id resolvido (usar no step 9)
         ↓
 7. [Somente se cliente NÃO estava cadastrado]
    → Agente pede nome e endereço completo para finalizar
    → POST /customers  ← cria o cadastro com endereço padrão
         ↓
-8. POST /orders { ..., address_id }
+8. GET /payment-methods?organization_id=<org_id>
+   → Retorna as formas de pagamento aceitas pela organização
+   → Agente pergunta ao cliente qual forma prefere e aguarda resposta
+        ↓
+9. POST /orders { ..., address_id, payment_method }
    ← address_id vem da resposta do calculate-freight (step 6)
+   ← payment_method vem da escolha do cliente (step 8)
    ← garante que o endereço de entrega registrado é o mesmo usado no cálculo
         ↓
 9a. [Webhook recebido] order.status_changed  ← lojista atualizou status
@@ -501,6 +506,40 @@ Busca produtos da organização. Pode filtrar por loja específica ou retornar o
 
 ---
 
+### `GET /payment-methods` — Listar formas de pagamento aceitas
+
+**Query params:**
+
+| Parâmetro | Tipo | Descrição |
+|---|---|---|
+| `organization_id` | UUID | **Obrigatório.** Organização da qual listar os métodos aceitos. |
+
+**Resposta 200:**
+```json
+{
+  "organization_id": "f988b66e-21e6-48d5-a90d-08f746600763",
+  "accepted_payment_methods": [
+    { "value": "credit_card", "label": "Cartão de Crédito" },
+    { "value": "debit_card",  "label": "Cartão de Débito" },
+    { "value": "pix",         "label": "Pix" },
+    { "value": "cash",        "label": "Dinheiro" }
+  ]
+}
+```
+
+**Valores possíveis de `value`:**
+
+| value | label |
+|---|---|
+| `credit_card` | Cartão de Crédito |
+| `debit_card` | Cartão de Débito |
+| `pix` | Pix |
+| `cash` | Dinheiro |
+
+> O agente deve apresentar ao cliente apenas as opções retornadas nesta rota (a organização pode desabilitar formas que não aceita). O `value` escolhido pelo cliente deve ser enviado como `payment_method` no `POST /orders`.
+
+---
+
 ### `POST /calculate-freight` — Calcular frete e prazo de entrega
 
 **Body:**
@@ -566,6 +605,7 @@ Exemplo: `tempo_min=20`, `tempo_max=60`, `raio=10km`, `distancia=3km` → `20 + 
   "shipping_value": 9.72,
   "shipping_distance_km": 3.24,
   "shipping_within_radius": true,
+  "payment_method": "pix",
   "items": [
     { "product_id": "uuid", "quantity": 2, "unit_price": 32.90 }
   ]
@@ -575,6 +615,17 @@ Exemplo: `tempo_min=20`, `tempo_max=60`, `raio=10km`, `distancia=3km` → `20 + 
 > Os campos `shipping_*` devem ser preenchidos com os valores retornados por `POST /calculate-freight`. O campo `estimated_delivery_minutes` é calculado automaticamente pelo servidor com base em `shipping_distance_km` e na configuração de tempo da loja — **não precisa ser enviado no body**.
 >
 > `address_id` é **opcional**. Se informado, é persistido como `delivery_address_id` no pedido. Se omitido, o servidor resolve automaticamente o endereço padrão do cliente. **Recomendado:** passe o `address_id` retornado por `POST /calculate-freight` para garantir consistência entre o endereço usado no cálculo e o endereço de entrega registrado no pedido.
+>
+> `payment_method` é **opcional** porém recomendado. Deve ser um dos valores retornados por `GET /payment-methods` para esta organização (`credit_card`, `debit_card`, `pix` ou `cash`). Se informado e não estiver entre as formas aceitas, retorna `422 INVALID_PAYMENT_METHOD`.
+
+**Resposta 422 — forma de pagamento não aceita:**
+```json
+{
+  "error": "Forma de pagamento não aceita por esta organização",
+  "code": "INVALID_PAYMENT_METHOD",
+  "accepted_payment_methods": ["pix", "cash"]
+}
+```
 
 **Resposta 201:**
 ```json
