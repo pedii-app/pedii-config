@@ -2450,24 +2450,44 @@ webhooks:
         content:
           application/json:
             schema:
-              type: object
-              required: [action, campaign_recipient_id, status]
-              properties:
-                action:
-                  type: string
-                  enum: [recipient_status]
-                campaign_recipient_id:
-                  type: string
-                  format: uuid
-                status:
-                  type: string
-                  enum: [sent, delivered, read, failed]
-                whatsapp_message_id:
-                  type: string
-                  description: waid da Evolution API. Enviar apenas no status "sent".
-                error_message:
-                  type: string
-                  description: Apenas para status "failed".
+              oneOf:
+                - title: recipient_status (por campaign_recipient_id)
+                  type: object
+                  required: [action, campaign_recipient_id, status]
+                  properties:
+                    action:
+                      type: string
+                      enum: [recipient_status]
+                    campaign_recipient_id:
+                      type: string
+                      format: uuid
+                    status:
+                      type: string
+                      enum: [sent, delivered, read, failed]
+                    whatsapp_message_id:
+                      type: string
+                      description: waid da Evolution API. Enviar apenas no status "sent".
+                    error_message:
+                      type: string
+                      description: Apenas para status "failed".
+                - title: recipient_status_by_message (por whatsapp_message_id)
+                  description: |
+                    O agente passa o waid de qualquer mensagem lida (fromMe=true).
+                    O Pedii faz o lookup internamente e retorna matched=false se não for campanha.
+                    Nunca retorna 404 — "não encontrado" é o fluxo normal.
+                  type: object
+                  required: [action, whatsapp_message_id, status]
+                  properties:
+                    action:
+                      type: string
+                      enum: [recipient_status_by_message]
+                    whatsapp_message_id:
+                      type: string
+                      description: ID da mensagem retornado pela Evolution API
+                      example: "3EB0A1B2C3D4E5F6"
+                    status:
+                      type: string
+                      enum: [sent, delivered, read, failed]
             examples:
               sent:
                 value:
@@ -2491,14 +2511,32 @@ webhooks:
                   campaign_recipient_id: "rcpt-uuid"
                   status: failed
                   error_message: "WhatsApp number not registered"
+              read_by_waid:
+                summary: Leitura por whatsapp_message_id (fluxo messages.update)
+                value:
+                  action: recipient_status_by_message
+                  whatsapp_message_id: "3EB0A1B2C3D4E5F6"
+                  status: read
       responses:
         "200":
           description: Status atualizado com sucesso
           content:
             application/json:
-              example:
-                ok: true
-                status: sent
+              examples:
+                recipient_status_ok:
+                  value:
+                    ok: true
+                    status: sent
+                matched_true:
+                  summary: Mensagem de campanha — status atualizado
+                  value:
+                    matched: true
+                    campaign_recipient_id: "rcpt-uuid"
+                    updated: true
+                matched_false:
+                  summary: Mensagem não pertence a campanha — ignorar
+                  value:
+                    matched: false
         "400":
           description: Parâmetros inválidos
         "401":

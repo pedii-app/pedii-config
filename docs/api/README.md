@@ -1160,9 +1160,10 @@ Dashboard → POST /campaigns action=dispatch
                ├─ persiste AIMessage no LangGraph com additional_kwargs.pedii_campaign_*
                └─ callback POST /campaigns action=recipient_status (sent | failed)
 
-Evolution API → messages.update → Agente
-               → GET /campaigns?waid=<id>     # descobre campaign_recipient_id
-               → POST /campaigns action=recipient_status (delivered | read)
+Evolution API → messages.update (fromMe=true, status=READ) → Agente
+               → POST /campaigns action=recipient_status_by_message { waid, status }
+                 ├── matched: false  → mensagem não é de campanha, ignorar
+                 └── matched: true  → Pedii atualiza read_at automaticamente
 ```
 
 ---
@@ -1232,22 +1233,42 @@ Disparado pelo Pedii ao agente para cada destinatário. Autenticação: header `
 
 ### Rastreamento de entrega e leitura (`messages.update`)
 
-Quando a Evolution API disparar `messages.update` com status `DELIVERY_ACK` (entregue) ou `READ` (lido):
+Quando a Evolution API disparar `messages.update` com `fromMe: true` e `status: "READ"`:
 
-1. **Consultar** `GET /campaigns?waid=<waid>` (auth: `Bearer <AGENT_API_KEY>`).
-   - Retorna `{ campaign_recipient_id, campaign_id, status }` ou `{ campaign_recipient_id: null }` se não for mensagem de campanha.
+O agente **não precisa** distinguir se a mensagem é de campanha ou não. Basta chamar:
 
-2. **Se `campaign_recipient_id` não for null**, fazer callback:
-   ```json
-   {
-     "action": "recipient_status",
-     "campaign_recipient_id": "<uuid>",
-     "status": "delivered"
-   }
-   ```
-   ou `"status": "read"` para `READ`.
+```json
+POST /campaigns
+{
+  "action": "recipient_status_by_message",
+  "whatsapp_message_id": "3EB0A1B2C3D4E5F6",
+  "status": "read"
+}
+```
 
-O Pedii registra `delivered_at` / `read_at` e o dashboard exibe os totalizadores em tempo real.
+O Pedii faz o lookup internamente e retorna:
+- `{ "matched": false }` — mensagem não pertence a campanha (notificação de pedido, handoff, etc.) → agente ignora
+- `{ "matched": true, "campaign_recipient_id": "...", "updated": true }` — `read_at` registrado, dashboard atualiza em tempo real
+- `{ "matched": true, "campaign_recipient_id": "...", "updated": false }` — já estava `read`, idempotente
+
+> **Nunca retorna 404.** "Não encontrado" é o fluxo normal para a maioria das mensagens lidas — não é erro.
+
+---
+
+### Callback `POST /campaigns action=recipient_status_by_message`
+
+| Campo | Tipo | Obrigatório | Descrição |
+|---|---|---|---|
+| `action` | string | sim | `"recipient_status_by_message"` |
+| `whatsapp_message_id` | string | sim | ID da mensagem retornado pela Evolution API |
+| `status` | string | sim | `read` \| `delivered` \| `sent` \| `failed` |
+
+**Resposta 200:**
+```json
+{ "matched": false }
+// ou
+{ "matched": true, "campaign_recipient_id": "<uuid>", "updated": true }
+```
 
 ---
 
